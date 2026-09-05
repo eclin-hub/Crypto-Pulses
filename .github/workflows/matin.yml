@@ -2,7 +2,6 @@ name: Rapport Crypto Matinal
 
 on:
   schedule:
-    # 06:00 UTC = 08:00 heure française en été (UTC+2)
     - cron: '0 6 * * *'
   workflow_dispatch:
 
@@ -23,7 +22,6 @@ jobs:
 
       - name: Exécuter le script
         env:
-          EMAIL_USER: ${{ secrets.EMAIL_USER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
         run: python CryptoPulse.py
