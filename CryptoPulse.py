@@ -51,7 +51,7 @@ def fetch_hype_hyperliquid():
 def fetch_yahoo_direct(symbole):
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbole}?interval=1d&range=2d"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=5).json()
         meta = res["chart"]["result"][0]["meta"]
         prix_actuel = float(meta["regularMarketPrice"])
@@ -73,7 +73,6 @@ def fetch_tradfi():
 
 
 def clean_html_text(raw_text):
-    """Nettoie les balises HTML éventuelles présentes dans les résumés RSS."""
     if not raw_text:
         return ""
     clean = re.sub(r"<.*?>", "", raw_text)
@@ -81,10 +80,9 @@ def clean_html_text(raw_text):
 
 
 def fetch_single_feed_top(url):
-    """Extrait le premier article récent d'un flux RSS."""
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     try:
-        res = requests.get(url, headers=headers, timeout=5)
+        res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             root = ET.fromstring(res.content)
             item = root.find(".//item")
@@ -104,36 +102,49 @@ def fetch_single_feed_top(url):
                     if item.find("description") is not None
                     else ""
                 )
-                return {
-                    "title": title.strip(),
-                    "link": link.strip(),
-                    "desc": clean_html_text(desc),
-                }
+                if title and link:
+                    return {
+                        "title": title.strip(),
+                        "link": link.strip(),
+                        "desc": clean_html_text(desc),
+                    }
     except Exception as e:
-        print(f"Erreur flux {url} : {e}")
+        print(f"Erreur parsing {url} : {e}")
     return None
 
 
 def fetch_curated_briefing():
-    """Récupère les 3 news phares : Géopo, Macro/Fed, et Crypto."""
+    # 1. GÉOPOLITIQUE
+    geopo = fetch_single_feed_top("http://feeds.bbci.co.uk/news/world/rss.xml")
+
+    # 2. MACRO & FED
+    macro = fetch_single_feed_top(
+        "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    )
+    if not macro:
+        macro = fetch_single_feed_top(
+            "https://news.google.com/rss/search?q=Federal+Reserve+OR+inflation+when:1d&hl=en-US&gl=US&ceid=US:en"
+        )
+
+    # 3. CRYPTO INSTITUTIONNELLE
+    crypto = fetch_single_feed_top("https://www.theblock.co/rss.xml")
+    if not crypto:
+        crypto = fetch_single_feed_top(
+            "https://www.coindesk.com/arc/outboundfeeds/rss/?category=markets"
+        )
+
     return {
         "geopolitics": {
-            "label": "🌍 Monde & Géopolitique (BBC)",
-            "data": fetch_single_feed_top(
-                "http://feeds.bbci.co.uk/news/world/rss.xml"
-            ),
+            "label": "🌍 Crise & Géopolitique (BBC World)",
+            "data": geopo,
         },
         "macro_fed": {
-            "label": "🏛️ Macro & Politique Éco / Fed (CNBC)",
-            "data": fetch_single_feed_top(
-                "https://search.cnbc.com/rs/search/view.html?partnerId=2000&keywords=fed&sort=date&output=rss"
-            ),
+            "label": "🏛️ Macro, Fed & Taux (MarketWatch / Dow Jones)",
+            "data": macro,
         },
         "crypto": {
-            "label": "⚡ Actu Crypto & Marchés (CoinDesk)",
-            "data": fetch_single_feed_top(
-                "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml"
-            ),
+            "label": "⚡ Crypto & Market Structure (The Block)",
+            "data": crypto,
         },
     }
 
@@ -155,7 +166,6 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
     c_eth, v_eth = get_color_html(eth["usd_24h_change"])
     c_hype, v_hype = get_color_html(hype_var)
 
-    # Lignes TradFi
     lignes_tradfi_html = ""
     for label, (px, var) in tradfi.items():
         if px is not None:
@@ -169,7 +179,6 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
             </tr>
             """
 
-    # Formatage des 3 blocs d'actualité
     news_blocks_html = ""
     for key, info in briefing_news.items():
         label = info["label"]
@@ -196,7 +205,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
             </h2>
             <p style="text-align: center; color: #8b949e; font-size: 13px; margin-top: -6px;">{maintenant}</p>
 
-            <!-- Sentiment -->
+            <!-- Fear & Greed -->
             <div style="background-color: #21262d; border-radius: 6px; padding: 12px; margin-bottom: 20px; text-align: center;">
                 <span style="color: #8b949e; font-size: 12px; text-transform: uppercase;">Fear & Greed Index</span><br>
                 <strong style="font-size: 18px; color: #f0883e;">{fng['value']}/100</strong> 
@@ -229,7 +238,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
                 {lignes_tradfi_html}
             </table>
 
-            <!-- Actualités Ciblées -->
+            <!-- 3 Titres Clés -->
             <h3 style="color: #ff7b72; font-size: 14px; text-transform: uppercase; margin-bottom: 10px;">
                 🚨 Les 3 Titres Clés de la Nuit
             </h3>
@@ -266,7 +275,7 @@ def main():
     tradfi = fetch_tradfi()
     briefing_news = fetch_curated_briefing()
 
-    print("Génération et envoi du rapport complet...")
+    print("Génération et envoi du rapport avec actualités ciblées...")
     envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news)
 
 
