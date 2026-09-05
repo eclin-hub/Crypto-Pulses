@@ -1,0 +1,29 @@
+name: Rapport Crypto Matinal
+
+on:
+  schedule:
+    # 06:00 UTC = 08:00 heure française en été (UTC+2)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  envoyer-rapport:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installer les dépendances
+        run: pip install requests colorama
+
+      - name: Exécuter le script
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        run: python CryptoPulse.py
