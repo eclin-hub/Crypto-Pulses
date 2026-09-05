@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -10,6 +11,7 @@ init(autoreset=True)
 # ================= CONFIGURATION =================
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RECEIVER_EMAIL = os.getenv("EMAIL_RECEIVER")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # =================================================
 
 
@@ -65,7 +67,6 @@ def fetch_yahoo_direct(symbole):
 
 
 def fetch_tradfi():
-    # Remplacement du Silver par le Pétrole Brut WTI (CL=F)
     tickers = {"Gold": "GC=F", "Crude Oil (WTI)": "CL=F", "S&P 500": "^GSPC"}
     data = {}
     for label, sym in tickers.items():
@@ -77,17 +78,18 @@ def clean_html_text(raw_text):
     if not raw_text:
         return ""
     clean = re.sub(r"<.*?>", "", raw_text)
-    return clean.strip()[:200] + ("..." if len(clean) > 200 else "")
+    return clean.strip()[:250]
 
 
-def fetch_single_feed_top(url):
+def fetch_multiple_feed_items(url, category, limit=6):
+    """Récupère une série d'articles bruts pour alimenter l'IA."""
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    items = []
     try:
         res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             root = ET.fromstring(res.content)
-            item = root.find(".//item")
-            if item is not None:
+            for item in root.findall(".//item")[:limit]:
                 title = (
                     item.find("title").text
                     if item.find("title") is not None
@@ -104,50 +106,101 @@ def fetch_single_feed_top(url):
                     else ""
                 )
                 if title and link:
-                    return {
-                        "title": title.strip(),
-                        "link": link.strip(),
-                        "desc": clean_html_text(desc),
-                    }
+                    items.append(
+                        {
+                            "category": category,
+                            "title": title.strip(),
+                            "link": link.strip(),
+                            "desc": clean_html_text(desc),
+                        }
+                    )
     except Exception as e:
-        print(f"Erreur parsing {url} : {e}")
-    return None
+        print(f"Erreur flux {url} : {e}")
+    return items
 
 
-def fetch_curated_briefing():
-    # 1. GÉOPOLITIQUE
-    geopo = fetch_single_feed_top("http://feeds.bbci.co.uk/news/world/rss.xml")
-
-    # 2. MACRO & FED
-    macro = fetch_single_feed_top(
-        "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+def collect_raw_news():
+    """Rassemble 15 à 20 dépêches de la nuit sur les trois thématiques."""
+    news_pool = []
+    # Géopolitique
+    news_pool.extend(
+        fetch_multiple_feed_items(
+            "http://feeds.bbci.co.uk/news/world/rss.xml", "Géopolitique", 7
+        )
     )
-    if not macro:
-        macro = fetch_single_feed_top(
-            "https://news.google.com/rss/search?q=Federal+Reserve+OR+inflation+when:1d&hl=en-US&gl=US&ceid=US:en"
+    # Macro / Fed / Taux
+    news_pool.extend(
+        fetch_multiple_feed_items(
+            "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+            "Macro/Fed",
+            6,
         )
-
-    # 3. CRYPTO INSTITUTIONNELLE
-    crypto = fetch_single_feed_top("https://www.theblock.co/rss.xml")
-    if not crypto:
-        crypto = fetch_single_feed_top(
-            "https://www.coindesk.com/arc/outboundfeeds/rss/?category=markets"
+    )
+    # Crypto de marché
+    news_pool.extend(
+        fetch_multiple_feed_items(
+            "https://www.theblock.co/rss.xml", "Crypto", 6
         )
+    )
+    return news_pool
 
-    return {
-        "geopolitics": {
-            "label": "🌍 Crise & Géopolitique (BBC World)",
-            "data": geopo,
-        },
-        "macro_fed": {
-            "label": "🏛️ Macro, Fed & Taux (MarketWatch / Dow Jones)",
-            "data": macro,
-        },
-        "crypto": {
-            "label": "⚡ Crypto & Market Structure (The Block)",
-            "data": crypto,
-        },
-    }
+
+def filtrer_et_analyser_avec_ia(news_pool):
+    """Demande à Gemini d'agir en rédacteur en chef et d'extraire les 3 infos critiques."""
+    if not GEMINI_API_KEY or not news_pool:
+        return None
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+
+    articles_text = ""
+    for i, a in enumerate(news_pool, 1):
+        articles_text += f"[{i}] Thème: {a['category']} | Titre: {a['title']} | Desc: {a['desc']} | URL: {a['link']}\n"
+
+    prompt = f"""Tu es un analyste macro et de marchés financiers senior pour un briefing matinal à 8h00.
+Voici la liste des actualités brutes tombées cette nuit :
+
+{articles_text}
+
+MISSION :
+Sélectionne exactement 3 événements parmi cette liste (idéalement 1 Géopolitique critique, 1 Macro/Banques Centrales/Fed, 1 Crypto/Market Structure).
+Écarte le bruit, les faits divers mineurs et les opinions sans impact. Garde ce qui a un véritable impact sur le risque mondial et les marchés.
+
+Pour chacun des 3 événements retenus, fournis :
+1. "category": Le badge (ex: "🌍 Géopolitique", "🏛️ Macro & Taux", "⚡ Marchés Crypto")
+2. "title": Un titre percutant traduit ou rédigé en français.
+3. "summary": Une explication concise de 2 phrases maximum expliquant l'événement et son enjeu/impact.
+4. "link": L'URL exacte associée à l'article dans la liste d'origine.
+
+Réponds UNIQUEMENT avec un JSON valide sous la forme d'une liste d'objets, sans Markdown ```json :
+[
+  {{"category": "...", "title": "...", "summary": "...", "link": "..."}},
+  {{"category": "...", "title": "...", "summary": "...", "link": "..."}},
+  {{"category": "...", "title": "...", "summary": "...", "link": "..."}}
+]
+"""
+
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=12)
+        if res.status_code == 200:
+            data = res.json()
+            raw_output = data["candidates"][0]["content"]["parts"][0][
+                "text"
+            ].strip()
+            # Nettoyage des éventuels backticks markdown
+            raw_output = re.sub(
+                r"^```json\s*", "", raw_output, flags=re.IGNORECASE
+            )
+            raw_output = re.sub(r"```$", "", raw_output).strip()
+            return json.loads(raw_output)
+        else:
+            print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
+    except Exception as e:
+        print(f"Erreur lors du filtrage IA : {e}")
+
+    return None
 
 
 def get_color_html(valeur):
@@ -158,7 +211,7 @@ def get_color_html(valeur):
     return couleur, f"{signe}{valeur:.2f}%"
 
 
-def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
+def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
     btc = cg["bitcoin"]
     eth = cg["ethereum"]
@@ -181,21 +234,21 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
             """
 
     news_blocks_html = ""
-    for key, info in briefing_news.items():
-        label = info["label"]
-        item = info["data"]
-        if item:
+    if ai_curated_news:
+        for item in ai_curated_news:
             news_blocks_html += f"""
             <div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262d;">
-                <span style="color: #f0883e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">{label}</span>
-                <a href="{item['link']}" target="_blank" style="color: #58a6ff; text-decoration: none; font-size: 13px; font-weight: bold; line-height: 1.4; display: block; margin-top: 3px;">
-                    {item['title']}
+                <span style="color: #f0883e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">{item.get('category', 'INFO')}</span>
+                <a href="{item.get('link', '#')}" target="_blank" style="color: #58a6ff; text-decoration: none; font-size: 13px; font-weight: bold; line-height: 1.4; display: block; margin-top: 3px;">
+                    {item.get('title')}
                 </a>
-                <p style="color: #8b949e; font-size: 12px; margin: 4px 0 0 0; line-height: 1.4;">
-                    {item['desc']}
+                <p style="color: #c9d1d9; font-size: 12px; margin: 4px 0 0 0; line-height: 1.45;">
+                    {item.get('summary')}
                 </p>
             </div>
             """
+    else:
+        news_blocks_html = "<p style='color: #8b949e; font-size: 12px; margin: 0;'>Synthèse d'actualités temporairement indisponible.</p>"
 
     html_content = f"""
     <html>
@@ -239,9 +292,9 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
                 {lignes_tradfi_html}
             </table>
 
-            <!-- 3 Titres Clés -->
+            <!-- 3 Titres Filtrés par IA -->
             <h3 style="color: #ff7b72; font-size: 14px; text-transform: uppercase; margin-bottom: 10px;">
-                🚨 Les 3 Titres Clés de la Nuit
+                🎯 Les 3 Développements Clés (Sélection IA)
             </h3>
             <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
                 {news_blocks_html}
@@ -251,7 +304,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
     </html>
     """
 
-    url = "https://api.resend.com/emails"
+    url = "[https://api.resend.com/emails](https://api.resend.com/emails)"
     headers = {
         "Authorization": f"Bearer {RESEND_API_KEY}",
         "Content-Type": "application/json",
@@ -265,7 +318,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
 
     res = requests.post(url, headers=headers, json=payload, timeout=10)
     if res.status_code in [200, 201]:
-        print(f"{Fore.GREEN}✔ Rapport complet envoyé avec succès via Resend")
+        print(f"{Fore.GREEN}✔ Briefing enrichi par IA envoyé avec succès !")
     else:
         print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
 
@@ -274,10 +327,15 @@ def main():
     fng, cg = fetch_crypto_data()
     hype_px, hype_var = fetch_hype_hyperliquid()
     tradfi = fetch_tradfi()
-    briefing_news = fetch_curated_briefing()
 
-    print("Génération et envoi du rapport complet...")
-    envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news)
+    print("Collecte du flux d'actualités brutes...")
+    raw_news = collect_raw_news()
+
+    print("Analyse, sélection et synthèse par IA...")
+    ai_curated_news = filtrer_et_analyser_avec_ia(raw_news)
+
+    print("Génération et envoi du rapport final...")
+    envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news)
 
 
 if __name__ == "__main__":
