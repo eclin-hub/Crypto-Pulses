@@ -113,11 +113,8 @@ def fetch_multiple_feed_items(url, category, limit=6):
 def collect_raw_news():
     """Rassemble 15 à 20 dépêches de la nuit (Géopolitique, Macro/Fed, Crypto)."""
     news_pool = []
-    # Géopolitique
     news_pool.extend(fetch_multiple_feed_items("http://feeds.bbci.co.uk/news/world/rss.xml", "Géopolitique", 7))
-    # Macro / Fed / Marchés
     news_pool.extend(fetch_multiple_feed_items("https://feeds.content.dowjones.io/public/rss/mw_topstories", "Macro/Fed", 6))
-    # Crypto institutionnelle
     news_pool.extend(fetch_multiple_feed_items("https://www.theblock.co/rss.xml", "Crypto", 6))
     return news_pool
 
@@ -134,28 +131,25 @@ def filtrer_et_analyser_avec_ia(news_pool):
     for i, a in enumerate(news_pool, 1):
         articles_text += f"[{i}] Thème: {a['category']} | Titre: {a['title']} | Desc: {a['desc']} | URL: {a['link']}\n"
 
-    prompt = f"""Tu es un analyste macro et de marchés financiers senior pour un briefing matinal à 8h00.
-Voici la liste des actualités brutes tombées cette nuit :
-
-{articles_text}
-
-MISSION :
-Sélectionne exactement 3 événements majeurs parmi cette liste (idéalement 1 Géopolitique critique, 1 Macro/Banques Centrales/Fed, 1 Crypto/Market Structure).
-Écarte le bruit et les faits divers sans impact. Garde ce qui a un véritable impact sur le risque mondial et les marchés.
-
-Pour chacun des 3 événements retenus, fournis :
-1. "category": Le badge (ex: "🌍 Géopolitique", "🏛️ Macro & Taux", "⚡ Marchés Crypto")
-2. "title": Un titre percutant rédigé en français.
-3. "summary": Une explication concise de 2 phrases maximum expliquant l'événement et son impact potentiel.
-4. "link": L'URL exacte associée à l'article dans la liste d'origine.
-
-Réponds UNIQUEMENT avec un JSON valide sous la forme d'une liste d'objets, sans Markdown ```json :
-[
-  {{"category": "...", "title": "...", "summary": "...", "link": "..."}},
-  {{"category": "...", "title": "...", "summary": "...", "link": "..."}},
-  {{"category": "...", "title": "...", "summary": "...", "link": "..."}}
-]
-"""
+    prompt = (
+        "Tu es un analyste macro et de marchés financiers senior pour un briefing matinal à 8h00.\n"
+        "Voici la liste des actualités brutes tombées cette nuit :\n\n"
+        f"{articles_text}\n\n"
+        "MISSION :\n"
+        "Sélectionne exactement 3 événements majeurs parmi cette liste (idéalement 1 Géopolitique critique, 1 Macro/Banques Centrales/Fed, 1 Crypto/Market Structure).\n"
+        "Écarte le bruit et les faits divers sans impact. Garde ce qui a un véritable impact sur le risque mondial et les marchés.\n\n"
+        "Pour chacun des 3 événements retenus, fournis :\n"
+        "1. 'category': Le badge (ex: '🌍 Géopolitique', '🏛️ Macro & Taux', '⚡ Marchés Crypto')\n"
+        "2. 'title': Un titre percutant rédigé en français.\n"
+        "3. 'summary': Une explication concise de 2 phrases maximum expliquant l'événement et son impact potentiel.\n"
+        "4. 'link': L'URL exacte associée à l'article dans la liste d'origine.\n\n"
+        "Réponds UNIQUEMENT avec un JSON valide sous la forme d'une liste d'objets, sans balises Markdown :\n"
+        "[\n"
+        '  {"category": "...", "title": "...", "summary": "...", "link": "..."},\n'
+        '  {"category": "...", "title": "...", "summary": "...", "link": "..."},\n'
+        '  {"category": "...", "title": "...", "summary": "...", "link": "..."}\n'
+        "]"
+    )
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}]
@@ -167,52 +161,4 @@ Réponds UNIQUEMENT avec un JSON valide sous la forme d'une liste d'objets, sans
             data = res.json()
             raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             raw_output = re.sub(r"^```json\s*", "", raw_output, flags=re.IGNORECASE)
-            raw_output = re.sub(r"```$", "", raw_output).strip()
-            return json.loads(raw_output)
-        else:
-            print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
-    except Exception as e:
-        print(f"Erreur lors de l'analyse IA : {e}")
-
-    return None
-
-
-def get_color_html(valeur):
-    if valeur is None:
-        return "#888888", "N/A"
-    signe = "+" if valeur >= 0 else ""
-    couleur = "#00c853" if valeur >= 0 else "#ff5252"
-    return couleur, f"{signe}{valeur:.2f}%"
-
-
-def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
-    maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
-    btc = cg["bitcoin"]
-    eth = cg["ethereum"]
-
-    c_btc, v_btc = get_color_html(btc["usd_24h_change"])
-    c_eth, v_eth = get_color_html(eth["usd_24h_change"])
-    c_hype, v_hype = get_color_html(hype_var)
-
-    # Lignes TradFi & Commodities
-    lignes_tradfi_html = ""
-    for label, (px, var) in tradfi.items():
-        if px is not None:
-            c, v = get_color_html(var)
-            devise = "pts" if label == "S&P 500" else "USDC"
-            lignes_tradfi_html += f"""
-            <tr>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39;">{label}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;">{px:,.2f} {devise}</td>
-                <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c}; font-weight: bold;">{v}</td>
-            </tr>
-            """
-
-    # Blocs actualités sélectionnés par l'IA
-    news_blocks_html = ""
-    if ai_curated_news:
-        for item in ai_curated_news:
-            news_blocks_html += f"""
-            <div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262d;">
-                <span style="color: #f0883e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">{item.get('category', 'ACTUALITÉ')}</span>
-                <a href="{item.get('link', '#')}" target="_blank" style="
+            raw_output = re.sub(r"
