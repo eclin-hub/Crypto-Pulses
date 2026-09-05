@@ -24,4 +24,5 @@ jobs:
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python CryptoPulse.py
