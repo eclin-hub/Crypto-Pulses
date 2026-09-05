@@ -65,7 +65,8 @@ def fetch_yahoo_direct(symbole):
 
 
 def fetch_tradfi():
-    tickers = {"Gold": "GC=F", "Silver": "SI=F", "S&P 500": "^GSPC"}
+    # Remplacement du Silver par le Pétrole Brut WTI (CL=F)
+    tickers = {"Gold": "GC=F", "Crude Oil (WTI)": "CL=F", "S&P 500": "^GSPC"}
     data = {}
     for label, sym in tickers.items():
         data[label] = fetch_yahoo_direct(sym)
@@ -275,7 +276,7 @@ def main():
     tradfi = fetch_tradfi()
     briefing_news = fetch_curated_briefing()
 
-    print("Génération et envoi du rapport avec actualités ciblées...")
+    print("Génération et envoi du rapport complet...")
     envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news)
 
 
