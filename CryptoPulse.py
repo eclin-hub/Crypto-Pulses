@@ -1,19 +1,14 @@
-from datetime import datetime
-from email.message import EmailMessage
 import os
-import smtplib
-from colorama import Fore, Style, init
+from datetime import datetime
 import requests
+from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-# ================= CONFIGURATION EMAIL =================
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465
-SENDER_EMAIL = os.getenv("EMAIL_USER")
-SENDER_PASSWORD = os.getenv("EMAIL_PASS")
+# ================= CONFIGURATION =================
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RECEIVER_EMAIL = os.getenv("EMAIL_RECEIVER")
-# =======================================================
+# =================================================
 
 
 def fetch_crypto_data():
@@ -148,22 +143,25 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi):
     </html>
     """
 
-    msg = EmailMessage()
-    msg["Subject"] = (
-        f"📊 Briefing Marchés - BTC: {btc['usd']:,.0f}$ | Fear: {fng['value']}"
-    )
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = RECEIVER_EMAIL
-    msg.set_content("Ce rapport nécessite un client compatible HTML.")
-    msg.add_alternative(html_content, subtype="html")
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "from": "CryptoPulse <onboarding@resend.dev>",
+        "to": [RECEIVER_EMAIL],
+        "subject": f"📊 Briefing Marchés - BTC: {btc['usd']:,.0f}$ | Fear: {fng['value']}",
+        "html": html_content,
+    }
 
-    try:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
-        print(f"{Fore.GREEN}✔ E-mail envoyé avec succès à {RECEIVER_EMAIL}")
-    except Exception as e:
-        print(f"{Fore.RED}✘ Échec de l'envoi du mail : {e}")
+    res = requests.post(url, headers=headers, json=payload, timeout=10)
+    if res.status_code in [200, 201]:
+        print(
+            f"{Fore.GREEN}✔ E-mail envoyé avec succès via Resend à {RECEIVER_EMAIL}"
+        )
+    else:
+        print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
 
 
 def main():
