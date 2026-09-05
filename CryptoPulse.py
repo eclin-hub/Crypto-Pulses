@@ -78,10 +78,10 @@ def clean_html_text(raw_text):
     if not raw_text:
         return ""
     clean = re.sub(r"<.*?>", "", raw_text)
-    return clean.strip()[:250]
+    return clean.strip()[:200]
 
 
-def fetch_multiple_feed_items(url, category, limit=6):
+def fetch_multiple_feed_items(url, category, limit=4):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     items = []
     try:
@@ -122,19 +122,19 @@ def collect_raw_news():
     news_pool = []
     news_pool.extend(
         fetch_multiple_feed_items(
-            "http://feeds.bbci.co.uk/news/world/rss.xml", "Géopolitique", 7
+            "http://feeds.bbci.co.uk/news/world/rss.xml", "Géopolitique", 4
         )
     )
     news_pool.extend(
         fetch_multiple_feed_items(
             "https://feeds.content.dowjones.io/public/rss/mw_topstories",
             "Macro/Fed",
-            6,
+            4,
         )
     )
     news_pool.extend(
         fetch_multiple_feed_items(
-            "https://www.theblock.co/rss.xml", "Crypto", 6
+            "https://www.theblock.co/rss.xml", "Crypto", 4
         )
     )
     return news_pool
@@ -153,10 +153,10 @@ def filtrer_et_analyser_avec_ia(news_pool):
 
     prompt = (
         "Tu es un analyste macro et de marches financiers senior pour un"
-        " briefing matinal a 8h00.\nVoici la liste des actualites brutes"
-        f" tombees cette nuit :\n\n{articles_text}\n\nMISSION :\nSelectionne"
-        " exactement 3 evenements majeurs parmi cette liste (idealement 1"
-        " Geopolitique critique, 1 Macro/Banques Centrales/Fed, 1 Crypto/Market"
+        " briefing matinal a 8h00.\nVoici les actualites brutes de la nuit"
+        f" :\n\n{articles_text}\n\nMISSION :\nSelectionne exactement 3"
+        " evenements majeurs parmi cette liste (idealement 1 Geopolitique"
+        " critique, 1 Macro/Banques Centrales/Fed, 1 Crypto/Market"
         " Structure).\nEcarte le bruit et les faits divers sans impact. Garde"
         " ce qui a un veritable impact sur le risque mondial et les"
         " marches.\n\nPour chacun des 3 evenements retenus, fournis :\n1."
@@ -173,7 +173,8 @@ def filtrer_et_analyser_avec_ia(news_pool):
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=12)
+        # Timeout augmenté à 30 secondes
+        res = requests.post(url, headers=headers, json=payload, timeout=30)
         if res.status_code == 200:
             data = res.json()
             raw_output = data["candidates"][0]["content"]["parts"][0][
