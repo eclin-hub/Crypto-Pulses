@@ -1,7 +1,9 @@
-import os
 from datetime import datetime
-import requests
+import os
+import re
+import xml.etree.ElementTree as ET
 from colorama import Fore, Style, init
+import requests
 
 init(autoreset=True)
 
@@ -70,6 +72,72 @@ def fetch_tradfi():
     return data
 
 
+def clean_html_text(raw_text):
+    """Nettoie les balises HTML éventuelles présentes dans les résumés RSS."""
+    if not raw_text:
+        return ""
+    clean = re.sub(r"<.*?>", "", raw_text)
+    return clean.strip()[:200] + ("..." if len(clean) > 200 else "")
+
+
+def fetch_single_feed_top(url):
+    """Extrait le premier article récent d'un flux RSS."""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            root = ET.fromstring(res.content)
+            item = root.find(".//item")
+            if item is not None:
+                title = (
+                    item.find("title").text
+                    if item.find("title") is not None
+                    else ""
+                )
+                link = (
+                    item.find("link").text
+                    if item.find("link") is not None
+                    else ""
+                )
+                desc = (
+                    item.find("description").text
+                    if item.find("description") is not None
+                    else ""
+                )
+                return {
+                    "title": title.strip(),
+                    "link": link.strip(),
+                    "desc": clean_html_text(desc),
+                }
+    except Exception as e:
+        print(f"Erreur flux {url} : {e}")
+    return None
+
+
+def fetch_curated_briefing():
+    """Récupère les 3 news phares : Géopo, Macro/Fed, et Crypto."""
+    return {
+        "geopolitics": {
+            "label": "🌍 Monde & Géopolitique (BBC)",
+            "data": fetch_single_feed_top(
+                "http://feeds.bbci.co.uk/news/world/rss.xml"
+            ),
+        },
+        "macro_fed": {
+            "label": "🏛️ Macro & Politique Éco / Fed (CNBC)",
+            "data": fetch_single_feed_top(
+                "https://search.cnbc.com/rs/search/view.html?partnerId=2000&keywords=fed&sort=date&output=rss"
+            ),
+        },
+        "crypto": {
+            "label": "⚡ Actu Crypto & Marchés (CoinDesk)",
+            "data": fetch_single_feed_top(
+                "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml"
+            ),
+        },
+    }
+
+
 def get_color_html(valeur):
     if valeur is None:
         return "#888888", "N/A"
@@ -78,7 +146,7 @@ def get_color_html(valeur):
     return couleur, f"{signe}{valeur:.2f}%"
 
 
-def envoyer_email(fng, cg, hype_px, hype_var, tradfi):
+def envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news):
     maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
     btc = cg["bitcoin"]
     eth = cg["ethereum"]
@@ -87,6 +155,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi):
     c_eth, v_eth = get_color_html(eth["usd_24h_change"])
     c_hype, v_hype = get_color_html(hype_var)
 
+    # Lignes TradFi
     lignes_tradfi_html = ""
     for label, (px, var) in tradfi.items():
         if px is not None:
@@ -100,21 +169,41 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi):
             </tr>
             """
 
+    # Formatage des 3 blocs d'actualité
+    news_blocks_html = ""
+    for key, info in briefing_news.items():
+        label = info["label"]
+        item = info["data"]
+        if item:
+            news_blocks_html += f"""
+            <div style="margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262d;">
+                <span style="color: #f0883e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">{label}</span>
+                <a href="{item['link']}" target="_blank" style="color: #58a6ff; text-decoration: none; font-size: 13px; font-weight: bold; line-height: 1.4; display: block; margin-top: 3px;">
+                    {item['title']}
+                </a>
+                <p style="color: #8b949e; font-size: 12px; margin: 4px 0 0 0; line-height: 1.4;">
+                    {item['desc']}
+                </p>
+            </div>
+            """
+
     html_content = f"""
     <html>
     <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0d1117; color: #c9d1d9; padding: 20px;">
         <div style="max-width: 520px; margin: auto; background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; padding: 20px;">
             <h2 style="color: #58a6ff; margin-top: 0; text-align: center; border-bottom: 1px solid #30363d; padding-bottom: 12px;">
-                ☕ Rapport Marchés du Matin
+                ☕ Morning Pulse : Marchés & Stratégie
             </h2>
             <p style="text-align: center; color: #8b949e; font-size: 13px; margin-top: -6px;">{maintenant}</p>
 
+            <!-- Sentiment -->
             <div style="background-color: #21262d; border-radius: 6px; padding: 12px; margin-bottom: 20px; text-align: center;">
                 <span style="color: #8b949e; font-size: 12px; text-transform: uppercase;">Fear & Greed Index</span><br>
                 <strong style="font-size: 18px; color: #f0883e;">{fng['value']}/100</strong> 
                 <span style="color: #c9d1d9;">({fng['value_classification']})</span>
             </div>
 
+            <!-- Cryptos USDC -->
             <h3 style="color: #e3b341; font-size: 14px; text-transform: uppercase; margin-bottom: 8px;">Crypto Actifs (USDC)</h3>
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
                 <tr>
@@ -134,10 +223,19 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi):
                 </tr>
             </table>
 
+            <!-- TradFi & Commodities -->
             <h3 style="color: #58a6ff; font-size: 14px; text-transform: uppercase; margin-bottom: 8px;">TradFi & Commodities</h3>
-            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
                 {lignes_tradfi_html}
             </table>
+
+            <!-- Actualités Ciblées -->
+            <h3 style="color: #ff7b72; font-size: 14px; text-transform: uppercase; margin-bottom: 10px;">
+                🚨 Les 3 Titres Clés de la Nuit
+            </h3>
+            <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
+                {news_blocks_html}
+            </div>
         </div>
     </body>
     </html>
@@ -151,15 +249,13 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi):
     payload = {
         "from": "CryptoPulse <onboarding@resend.dev>",
         "to": [RECEIVER_EMAIL],
-        "subject": f"📊 Briefing Marchés - BTC: {btc['usd']:,.0f}$ | Fear: {fng['value']}",
+        "subject": f"☕ Briefing Matin - BTC: {btc['usd']:,.0f}$ | Fear: {fng['value']}",
         "html": html_content,
     }
 
     res = requests.post(url, headers=headers, json=payload, timeout=10)
     if res.status_code in [200, 201]:
-        print(
-            f"{Fore.GREEN}✔ E-mail envoyé avec succès via Resend à {RECEIVER_EMAIL}"
-        )
+        print(f"{Fore.GREEN}✔ Rapport complet envoyé avec succès via Resend")
     else:
         print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
 
@@ -168,9 +264,10 @@ def main():
     fng, cg = fetch_crypto_data()
     hype_px, hype_var = fetch_hype_hyperliquid()
     tradfi = fetch_tradfi()
+    briefing_news = fetch_curated_briefing()
 
-    print("Génération et envoi du rapport...")
-    envoyer_email(fng, cg, hype_px, hype_var, tradfi)
+    print("Génération et envoi du rapport complet...")
+    envoyer_email(fng, cg, hype_px, hype_var, tradfi, briefing_news)
 
 
 if __name__ == "__main__":
