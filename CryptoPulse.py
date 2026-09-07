@@ -180,10 +180,9 @@ def filtrer_et_analyser_avec_ia(news_pool):
             raw_output = data["candidates"][0]["content"]["parts"][0][
                 "text"
             ].strip()
-            raw_output = re.sub(
-                r"^```json\s*", "", raw_output, flags=re.IGNORECASE
-            )
-            raw_output = re.sub(r"```$", "", raw_output).strip()
+            json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group(0))
             return json.loads(raw_output)
         else:
             print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
@@ -256,7 +255,6 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
             " d'actualités temporairement indisponible.</p>"
         )
 
-    # --- Sélection automatique du brief juridique du jour ---
     jour_annee = datetime.now().timetuple().tm_yday
     brief_du_jour = LEGAL_BRIEFS[jour_annee % len(LEGAL_BRIEFS)]
 
