@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from colorama import Fore, Style, init
 import requests
+from legal_briefs import LEGAL_BRIEFS
 
 init(autoreset=True)
 
@@ -144,7 +145,7 @@ def filtrer_et_analyser_avec_ia(news_pool):
     if not GEMINI_API_KEY or not news_pool:
         return None
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
 
     articles_text = ""
@@ -173,7 +174,6 @@ def filtrer_et_analyser_avec_ia(news_pool):
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
-        # Timeout augmenté à 30 secondes
         res = requests.post(url, headers=headers, json=payload, timeout=30)
         if res.status_code == 200:
             data = res.json()
@@ -256,6 +256,28 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
             " d'actualités temporairement indisponible.</p>"
         )
 
+    # --- Sélection automatique du brief juridique du jour ---
+    jour_annee = datetime.now().timetuple().tm_yday
+    brief_du_jour = LEGAL_BRIEFS[jour_annee % len(LEGAL_BRIEFS)]
+
+    legal_block_html = f"""
+    <h3 style="color: #58a6ff; font-size: 14px; text-transform: uppercase; margin-top: 24px; margin-bottom: 10px;">
+      ⚖️ Le Point Droit Financier : {brief_du_jour['title']}
+    </h3>
+    <div style="background-color: #0d1117; border-left: 3px solid #58a6ff; border-radius: 6px; padding: 14px; border-top: 1px solid #30363d; border-right: 1px solid #30363d; border-bottom: 1px solid #30363d;">
+      <span style="color: #79c0ff; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+        Thème : {brief_du_jour['category']}
+      </span>
+      <p style="color: #c9d1d9; font-size: 12px; margin: 6px 0 8px 0; line-height: 1.45;">
+        {brief_du_jour['summary']}
+      </p>
+      <div style="background-color: #161b22; border-radius: 4px; padding: 8px 10px; border: 1px solid #30363d;">
+        <span style="color: #f0883e; font-size: 11px; font-weight: bold;">À RETENIR :</span>
+        <span style="color: #8b949e; font-size: 11px; line-height: 1.4;"> {brief_du_jour['takeaway']}</span>
+      </div>
+    </div>
+    """
+
     btc_px = btc["usd"]
     eth_px = eth["usd"]
     hype_display = f"{hype_px:,.2f} USDC" if hype_px is not None else "N/A"
@@ -307,6 +329,8 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
       {news_blocks_html}
     </div>
+
+    {legal_block_html}
   </div>
 </body>
 </html>"""
