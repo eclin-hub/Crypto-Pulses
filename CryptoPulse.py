@@ -80,7 +80,7 @@ def clean_html_text(raw_text):
     if not raw_text:
         return ""
     clean = re.sub(r"<.*?>", "", raw_text)
-    return clean.strip()[:200]
+    return clean.strip()[:150]
 
 
 def fetch_multiple_feed_items(url, category, limit=4):
@@ -124,19 +124,19 @@ def collect_raw_news():
     news_pool = []
     news_pool.extend(
         fetch_multiple_feed_items(
-            "http://feeds.bbci.co.uk/news/world/rss.xml", "Géopolitique", 4
+            "http://feeds.bbci.co.uk/news/world/rss.xml", "Géopolitique", 3
         )
     )
     news_pool.extend(
         fetch_multiple_feed_items(
             "https://feeds.content.dowjones.io/public/rss/mw_topstories",
             "Macro/Fed",
-            4,
+            3,
         )
     )
     news_pool.extend(
         fetch_multiple_feed_items(
-            "https://www.theblock.co/rss.xml", "Crypto", 4
+            "https://www.theblock.co/rss.xml", "Crypto", 3
         )
     )
     return news_pool
@@ -146,57 +146,60 @@ def filtrer_et_analyser_avec_ia(news_pool):
     if not GEMINI_API_KEY or not news_pool:
         return None
 
+    # Synthèse concise des titres pour une réponse ultra rapide
     articles_text = ""
     for i, a in enumerate(news_pool, 1):
-        articles_text += f"[{i}] Theme: {a['category']} | Titre: {a['title']} | Desc: {a['desc']} | URL: {a['link']}\n"
+        articles_text += f"[{i}] {a['category']} | Titre: {a['title']} | URL: {a['link']}\n"
 
     prompt = (
-        "Tu es un analyste macro et de marches financiers senior pour un briefing matinal a 8h00.\n"
-        f"Voici les actualites brutes de la nuit :\n\n{articles_text}\n\n"
-        "MISSION :\n"
-        "Selectionne exactement 3 evenements majeurs parmi cette liste (idealement 1 Geopolitique critique, 1 Macro/Fed, 1 Crypto).\n"
-        "Ecarte le bruit et les faits divers sans impact.\n\n"
-        "Pour chacun des 3 evenements retenus, fournis :\n"
-        "1. 'category': Le badge (ex: '🌍 Géopolitique', '🏛️ Macro & Taux', '⚡ Marchés Crypto')\n"
-        "2. 'title': Un titre percutant redige en francais.\n"
-        "3. 'summary': Une explication concise de 2 phrases maximum expliquant l'evenement et son impact potentiel.\n"
-        "4. 'link': L'URL exacte associee a l'article dans la liste d'origine.\n\n"
-        "Reponds STRICTEMENT avec un JSON valide sous la forme d'une liste d'objets, sans balises Markdown :\n"
-        '[\n  {"category": "...", "title": "...", "summary": "...", "link": "..."}\n]'
+        "Tu es un analyste financier macro senior pour un briefing matinal.\n"
+        f"Voici les actualites brutes :\n\n{articles_text}\n\n"
+        "Choisis exactement 3 evenements prioritaires (idealement 1 Geopolitique, 1 Macro/Taux, 1 Crypto).\n"
+        "Pour chacun, remplis cet objet JSON :\n"
+        "- category : un badge court avec emoji (ex: '🌍 Géopolitique', '🏛️ Macro & Fed', '⚡ Crypto')\n"
+        "- title : un titre percutant en francais\n"
+        "- summary : un resume de 2 phrases percutantes sur les implications de marche\n"
+        "- link : l'URL exacte reprise de la liste d'origine\n\n"
+        "Renvoie STRICTEMENT un tableau JSON de 3 elements."
     )
 
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
+    
+    # Configuration avec sortie JSON forcée pour éliminer toute hésitation du modèle
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.2
+        }
+    }
 
-    # Modèles à tester par ordre de priorité
-    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
+    for attempt in range(3):
+        try:
+            # Timeout à 60s pour absorber les éventuels pics de latence Google
+            res = requests.post(url, headers=headers, json=payload, timeout=60)
+            if res.status_code == 200:
+                data = res.json()
+                raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group(0))
+                return json.loads(raw_output)
 
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        
-        # 3 tentatives par modèle en cas de 503 ou 429
-        for attempt in range(3):
-            try:
-                res = requests.post(url, headers=headers, json=payload, timeout=30)
-                if res.status_code == 200:
-                    data = res.json()
-                    raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
-                    if json_match:
-                        return json.loads(json_match.group(0))
-                    return json.loads(raw_output)
-                
-                # En cas de surcharge temporaire (503 ou 429), temporiser et retenter
-                if res.status_code in [503, 429]:
-                    print(f"Tentative {attempt + 1}/3 sur {model_name} : serveur occupé ({res.status_code}), nouvelle tentative dans 3s...")
-                    time.sleep(3)
-                    continue
-                else:
-                    print(f"Erreur API Gemini ({res.status_code}) sur {model_name} : {res.text}")
-                    break
-            except Exception as e:
-                print(f"Erreur requête sur {model_name} : {e}")
-                time.sleep(2)
+            if res.status_code in [503, 429]:
+                print(f"Serveur Gemini en pic de charge ({res.status_code}). Nouvelle tentative dans 5s (essai {attempt+1}/3)...")
+                time.sleep(5)
+                continue
+            else:
+                print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
+                break
+        except requests.exceptions.Timeout:
+            print(f"Timeout lors de l'appel Gemini (essai {attempt+1}/3). Nouvelle tentative dans 4s...")
+            time.sleep(4)
+        except Exception as e:
+            print(f"Exception lors de l'analyse IA : {e}")
+            time.sleep(3)
 
     return None
 
