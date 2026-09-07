@@ -142,10 +142,14 @@ def collect_raw_news():
 
 
 def filtrer_et_analyser_avec_ia(news_pool):
-    if not GEMINI_API_KEY or not news_pool:
+    if not GEMINI_API_KEY:
+        print(f"{Fore.RED}ERREUR: GEMINI_API_KEY non fournie.")
+        return None
+    if not news_pool:
+        print(f"{Fore.RED}ERREUR: Aucun article chargé via les flux RSS.")
         return None
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
 
     articles_text = ""
@@ -153,22 +157,18 @@ def filtrer_et_analyser_avec_ia(news_pool):
         articles_text += f"[{i}] Theme: {a['category']} | Titre: {a['title']} | Desc: {a['desc']} | URL: {a['link']}\n"
 
     prompt = (
-        "Tu es un analyste macro et de marches financiers senior pour un"
-        " briefing matinal a 8h00.\nVoici les actualites brutes de la nuit"
-        f" :\n\n{articles_text}\n\nMISSION :\nSelectionne exactement 3"
-        " evenements majeurs parmi cette liste (idealement 1 Geopolitique"
-        " critique, 1 Macro/Banques Centrales/Fed, 1 Crypto/Market"
-        " Structure).\nEcarte le bruit et les faits divers sans impact. Garde"
-        " ce qui a un veritable impact sur le risque mondial et les"
-        " marches.\n\nPour chacun des 3 evenements retenus, fournis :\n1."
-        " 'category': Le badge (ex: '🌍 Géopolitique', '🏛️ Macro & Taux', '⚡"
-        " Marchés Crypto')\n2. 'title': Un titre percutant redige en"
-        " francais.\n3. 'summary': Une explication concise de 2 phrases"
-        " maximum expliquant l'evenement et son impact potentiel.\n4. 'link':"
-        " L'URL exacte associee a l'article dans la liste d'origine.\n\nReponds"
-        " UNIQUEMENT avec un JSON valide sous la forme d'une liste d'objets,"
-        ' sans balises Markdown :\n[\n  {"category": "...", "title": "...",'
-        ' "summary": "...", "link": "..."}\n]'
+        "Tu es un analyste macro et de marches financiers senior pour un briefing matinal a 8h00.\n"
+        f"Voici les actualites brutes de la nuit :\n\n{articles_text}\n\n"
+        "MISSION :\n"
+        "Selectionne exactement 3 evenements majeurs parmi cette liste (idealement 1 Geopolitique critique, 1 Macro/Fed, 1 Crypto).\n"
+        "Ecarte le bruit et les faits divers sans impact.\n\n"
+        "Pour chacun des 3 evenements retenus, fournis :\n"
+        "1. 'category': Le badge (ex: '🌍 Géopolitique', '🏛️ Macro & Taux', '⚡ Marchés Crypto')\n"
+        "2. 'title': Un titre percutant redige en francais.\n"
+        "3. 'summary': Une explication concise de 2 phrases maximum expliquant l'evenement et son impact potentiel.\n"
+        "4. 'link': L'URL exacte associee a l'article dans la liste d'origine.\n\n"
+        "Reponds STRICTEMENT avec un JSON valide sous la forme d'une liste d'objets, sans balises Markdown :\n"
+        '[\n  {"category": "...", "title": "...", "summary": "...", "link": "..."}\n]'
     )
 
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
@@ -177,17 +177,15 @@ def filtrer_et_analyser_avec_ia(news_pool):
         res = requests.post(url, headers=headers, json=payload, timeout=30)
         if res.status_code == 200:
             data = res.json()
-            raw_output = data["candidates"][0]["content"]["parts"][0][
-                "text"
-            ].strip()
+            raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
             if json_match:
                 return json.loads(json_match.group(0))
             return json.loads(raw_output)
         else:
-            print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
+            print(f"{Fore.RED}Erreur API Gemini ({res.status_code}) : {res.text}")
     except Exception as e:
-        print(f"Erreur lors de l'analyse IA : {e}")
+        print(f"{Fore.RED}Erreur lors de l'analyse IA : {e}")
 
     return None
 
@@ -216,14 +214,9 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
             devise = "pts" if label == "S&P 500" else "USDC"
             lignes_tradfi_html += (
                 "<tr>"
-                f"<td style='padding: 8px 12px; border-bottom: 1px solid"
-                f" #2a2e39;'>{label}</td>"
-                "<td style='padding: 8px 12px; border-bottom: 1px solid"
-                " #2a2e39; text-align: right; font-weight:"
-                f" bold;'>{px:,.2f} {devise}</td>"
-                "<td style='padding: 8px 12px; border-bottom: 1px solid"
-                f" #2a2e39; text-align: right; color: {c}; font-weight:"
-                f" bold;'>{v}</td>"
+                f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39;'>{label}</td>"
+                f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;'>{px:,.2f} {devise}</td>"
+                f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c}; font-weight: bold;'>{v}</td>"
                 "</tr>"
             )
 
@@ -235,24 +228,15 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
             title = item.get("title", "")
             summary = item.get("summary", "")
             news_blocks_html += (
-                "<div style='margin-bottom: 14px; padding-bottom: 10px;"
-                " border-bottom: 1px solid #21262d;'>"
-                "<span style='color: #f0883e; font-size: 11px; font-weight:"
-                " 700; text-transform: uppercase; letter-spacing:"
-                f" 0.5px;'>{cat}</span>"
-                f"<a href='{link}' target='_blank' style='color: #58a6ff;"
-                " text-decoration: none; font-size: 13px; font-weight: bold;"
-                " line-height: 1.4; display: block; margin-top: 3px;'>"
-                f"{title}"
-                "</a>"
-                "<p style='color: #c9d1d9; font-size: 12px; margin: 4px 0 0 0;"
-                f" line-height: 1.45;'>{summary}</p>"
+                "<div style='margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262d;'>"
+                f"<span style='color: #f0883e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;'>{cat}</span>"
+                f"<a href='{link}' target='_blank' style='color: #58a6ff; text-decoration: none; font-size: 13px; font-weight: bold; line-height: 1.4; display: block; margin-top: 3px;'>{title}</a>"
+                f"<p style='color: #c9d1d9; font-size: 12px; margin: 4px 0 0 0; line-height: 1.45;'>{summary}</p>"
                 "</div>"
             )
     else:
         news_blocks_html = (
-            "<p style='color: #8b949e; font-size: 12px; margin: 0;'>Synthèse"
-            " d'actualités temporairement indisponible.</p>"
+            "<p style='color: #8b949e; font-size: 12px; margin: 0;'>Synthèse d'actualités temporairement indisponible.</p>"
         )
 
     jour_annee = datetime.now().timetuple().tm_yday
