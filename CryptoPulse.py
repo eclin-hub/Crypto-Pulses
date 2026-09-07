@@ -2,6 +2,7 @@ from datetime import datetime
 import json
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from colorama import Fore, Style, init
 import requests
@@ -145,10 +146,6 @@ def filtrer_et_analyser_avec_ia(news_pool):
     if not GEMINI_API_KEY or not news_pool:
         return None
 
-    # Endpoint Gemini 3.6 Flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
-    headers = {"Content-Type": "application/json"}
-
     articles_text = ""
     for i, a in enumerate(news_pool, 1):
         articles_text += f"[{i}] Theme: {a['category']} | Titre: {a['title']} | Desc: {a['desc']} | URL: {a['link']}\n"
@@ -169,20 +166,37 @@ def filtrer_et_analyser_avec_ia(news_pool):
     )
 
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {"Content-Type": "application/json"}
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=30)
-        if res.status_code == 200:
-            data = res.json()
-            raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-            json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(0))
-            return json.loads(raw_output)
-        else:
-            print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
-    except Exception as e:
-        print(f"Erreur lors de l'analyse IA : {e}")
+    # Modèles à tester par ordre de priorité
+    models_to_try = ["gemini-3.6-flash", "gemini-2.5-flash"]
+
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        
+        # 3 tentatives par modèle en cas de 503 ou 429
+        for attempt in range(3):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=30)
+                if res.status_code == 200:
+                    data = res.json()
+                    raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
+                    if json_match:
+                        return json.loads(json_match.group(0))
+                    return json.loads(raw_output)
+                
+                # En cas de surcharge temporaire (503 ou 429), temporiser et retenter
+                if res.status_code in [503, 429]:
+                    print(f"Tentative {attempt + 1}/3 sur {model_name} : serveur occupé ({res.status_code}), nouvelle tentative dans 3s...")
+                    time.sleep(3)
+                    continue
+                else:
+                    print(f"Erreur API Gemini ({res.status_code}) sur {model_name} : {res.text}")
+                    break
+            except Exception as e:
+                print(f"Erreur requête sur {model_name} : {e}")
+                time.sleep(2)
 
     return None
 
