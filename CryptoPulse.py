@@ -143,13 +143,14 @@ def collect_raw_news():
 
 def filtrer_et_analyser_avec_ia(news_pool):
     if not GEMINI_API_KEY:
-        print(f"{Fore.RED}ERREUR: GEMINI_API_KEY non fournie.")
+        print(f"{Fore.RED}ERREUR: GEMINI_API_KEY absente.")
         return None
     if not news_pool:
         print(f"{Fore.RED}ERREUR: Aucun article chargé via les flux RSS.")
         return None
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # Endpoint Gemini 2.5 Flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
 
     articles_text = ""
@@ -239,6 +240,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
             "<p style='color: #8b949e; font-size: 12px; margin: 0;'>Synthèse d'actualités temporairement indisponible.</p>"
         )
 
+    # Notion juridique du jour (tourne chaque jour de l'année)
     jour_annee = datetime.now().timetuple().tm_yday
     brief_du_jour = LEGAL_BRIEFS[jour_annee % len(LEGAL_BRIEFS)]
 
