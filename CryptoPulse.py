@@ -14,6 +14,7 @@ init(autoreset=True)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RECEIVER_EMAIL = os.getenv("EMAIL_RECEIVER")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # =================================================
 
 
@@ -71,7 +72,7 @@ def fetch_yahoo_direct(symbole):
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=5).json()
         meta = res["chart"]["result"][0]["meta"]
-        
+
         prix_actuel = meta.get("regularMarketPrice")
         prix_precedent = meta.get("chartPreviousClose") or meta.get("previousClose")
 
@@ -154,8 +155,52 @@ def collect_raw_news():
     return news_pool
 
 
+def appeler_groq_llama(prompt):
+    if not GROQ_API_KEY:
+        print("Clé GROQ_API_KEY absente, passage du secours Groq.")
+        return None
+
+    print("Bascule sur le fournisseur de secours : Groq (Llama 3.3)...")
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Tu es un analyste financier macro senior. Réponds TOUJOURS par un tableau JSON valide de 3 objets avec les champs : category, title, summary, link.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+    }
+
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=20)
+        if res.status_code == 200:
+            content = res.json()["choices"][0]["message"]["content"].strip()
+            json_match = re.search(r"\[.*\]", content, re.DOTALL)
+            parsed = json.loads(json_match.group(0)) if json_match else json.loads(content)
+            
+            if isinstance(parsed, dict):
+                for val in parsed.values():
+                    if isinstance(val, list):
+                        return val
+            elif isinstance(parsed, list):
+                return parsed
+        else:
+            print(f"Erreur Groq ({res.status_code}) : {res.text[:120]}")
+    except Exception as e:
+        print(f"Exception Groq : {e}")
+
+    return None
+
+
 def filtrer_et_analyser_avec_ia(news_pool):
-    if not GEMINI_API_KEY or not news_pool:
+    if not news_pool:
         return None
 
     articles_text = ""
@@ -171,58 +216,33 @@ def filtrer_et_analyser_avec_ia(news_pool):
         "- title : un titre percutant en francais\n"
         "- summary : un resume de 2 phrases percutantes sur les implications de marche\n"
         "- link : l'URL exacte reprise de la liste d'origine\n\n"
-        "Renvoie STRICTEMENT un tableau JSON de 3 elements."
+        "Renvoie STRICTEMENT un tableau JSON de 3 elements : [ {category, title, summary, link}, ... ]"
     )
 
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "temperature": 0.2,
-        },
-    }
+    # 1. Tentatives via Gemini (modèles texte valides uniquement)
+    if GEMINI_API_KEY:
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.2,
+            },
+        }
 
-    # Résolution dynamique et intelligente des modèles actifs
-    modeles_valides = []
-    try:
-        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        r = requests.get(list_url, timeout=8)
-        if r.status_code == 200:
-            data = r.json().get("models", [])
-            flash_models = []
-            other_models = []
-            for m in data:
-                nom = m.get("name", "").replace("models/", "")
-                methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods and "embedding" not in nom:
-                    if "flash" in nom:
-                        flash_models.append(nom)
-                    else:
-                        other_models.append(nom)
-            # Les modèles Flash en tête, puis les autres
-            modeles_valides = flash_models + other_models
-    except Exception as e:
-        print(f"Impossible de lister dynamiquement les modèles : {e}")
+        # On cible directement les modèles textuels stables
+        modeles_gemini = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
 
-    # File de secours par défaut si le GET /models échoue
-    if not modeles_valides:
-        modeles_valides = ["gemini-flash-latest", "gemini-pro-latest"]
+        for nom_modele in modeles_gemini:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{nom_modele}:generateContent?key={GEMINI_API_KEY}"
+            print(f"Tentative Gemini avec {nom_modele}...")
 
-    print(f"Priorité des modèles : {modeles_valides[:3]}")
-
-    for nom_modele in modeles_valides[:3]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{nom_modele}:generateContent?key={GEMINI_API_KEY}"
-        print(f"Tentative d'analyse avec {nom_modele}...")
-
-        for tentative in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=40)
+                res = requests.post(url, headers=headers, json=payload, timeout=25)
                 if res.status_code == 200:
                     data = res.json()
                     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
                     raw_output = parts[0].get("text", "").strip() if parts else ""
-                    
                     if raw_output:
                         json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
                         parsed = json.loads(json_match.group(0)) if json_match else json.loads(raw_output)
@@ -230,28 +250,25 @@ def filtrer_et_analyser_avec_ia(news_pool):
                             print(f"{Fore.GREEN}✔ Synthèse réussie avec {nom_modele}")
                             return parsed
 
-                if res.status_code in [429, 500, 503]:
-                    print(f"Saturation sur {nom_modele} ({res.status_code}). Pause 6s...")
-                    time.sleep(6)
-                else:
-                    print(f"Refus sur {nom_modele} ({res.status_code}) : {res.text[:120]}")
-                    break
-
-            except requests.exceptions.Timeout:
-                print(f"Timeout sur {nom_modele}...")
-                time.sleep(4)
+                print(f"Échec Gemini ({nom_modele} - code {res.status_code})")
             except Exception as e:
-                print(f"Erreur d'exécution : {e}")
-                time.sleep(2)
+                print(f"Erreur d'appel Gemini ({nom_modele}) : {e}")
 
-    print(f"{Fore.YELLOW}⚠️ Bascule sur le flux d'actualités brut (fallback).")
+    # 2. Secours automatique sur Groq si Gemini échoue ou sature
+    news_groq = appeler_groq_llama(prompt)
+    if news_groq:
+        print(f"{Fore.GREEN}✔ Synthèse réussie avec Groq !")
+        return news_groq
+
+    # 3. Fallback ultime si toutes les IA échouent
+    print(f"{Fore.YELLOW}⚠️ Toutes les IA sont indisponibles. Bascule sur le flux brut.")
     fallback_news = []
     for item in news_pool[:3]:
         fallback_news.append({
             "category": f"📰 {item['category']}",
             "title": item["title"],
             "summary": item["desc"] or "Consultez l'article pour les détails financiers.",
-            "link": item["link"]
+            "link": item["link"],
         })
     return fallback_news
 
@@ -418,7 +435,7 @@ def main():
     print("Collecte du pool d'actualités brutes...")
     raw_news = collect_raw_news()
 
-    print("Analyse, sélection et synthèse par IA (Gemini)...")
+    print("Analyse, sélection et synthèse par IA...")
     ai_curated_news = filtrer_et_analyser_avec_ia(raw_news)
 
     print("Génération et expédition du rapport final...")
