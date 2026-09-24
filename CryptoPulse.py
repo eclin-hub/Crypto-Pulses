@@ -99,44 +99,14 @@ def clean_html_text(raw_text):
     if not raw_text:
         return ""
     clean = re.sub(r"<.*?>", "", raw_text)
-    clean = re.sub(r"\s+", " ", clean)
-    return clean.strip()[:280]
-
-
-def extract_item_image(item):
-    """Extrait l'URL de l'image associée au flux RSS."""
-    # 1. Balise enclosure
-    enclosure = item.find("enclosure")
-    if enclosure is not None and "image" in enclosure.get("type", ""):
-        url = enclosure.get("url")
-        if url:
-            return url
-
-    # 2. Balise media:content ou media:thumbnail (namespaces XML)
-    namespaces = {
-        "media": "http://search.yahoo.com/mrss/",
-        "content": "http://purl.org/rss/1.0/modules/content/",
-    }
-    for tag in [".//media:content", ".//media:thumbnail"]:
-        elem = item.find(tag, namespaces)
-        if elem is not None and elem.get("url"):
-            return elem.get("url")
-
-    # 3. Image dans la description HTML
-    desc = item.find("description")
-    if desc is not None and desc.text:
-        img_match = re.search(r'<img[^>]+src=["\'](.*?)["\']', desc.text)
-        if img_match:
-            return img_match.group(1)
-
-    return None
+    return clean.strip()[:180]
 
 
 def fetch_multiple_feed_items(url, category, limit=3):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     items = []
     try:
-        res = requests.get(url, headers=headers, timeout=8)
+        res = requests.get(url, headers=headers, timeout=6)
         if res.status_code == 200:
             root = ET.fromstring(res.content)
             for item in root.findall(".//item")[:limit]:
@@ -147,7 +117,6 @@ def fetch_multiple_feed_items(url, category, limit=3):
                 title = title_el.text if title_el is not None and title_el.text else ""
                 link = link_el.text if link_el is not None and link_el.text else ""
                 desc = desc_el.text if desc_el is not None and desc_el.text else ""
-                image_url = extract_item_image(item)
 
                 if title and link:
                     items.append(
@@ -156,7 +125,6 @@ def fetch_multiple_feed_items(url, category, limit=3):
                             "title": title.strip(),
                             "link": link.strip(),
                             "desc": clean_html_text(desc),
-                            "image": image_url,
                         }
                     )
     except Exception as e:
@@ -174,13 +142,13 @@ def collect_raw_news():
     news_pool.extend(
         fetch_multiple_feed_items(
             "https://feeds.content.dowjones.io/public/rss/mw_topstories",
-            "Macro & Taux",
+            "Macro/Fed",
             3,
         )
     )
     news_pool.extend(
         fetch_multiple_feed_items(
-            "https://www.theblock.co/rss.xml", "Marchés Crypto", 3
+            "https://www.theblock.co/rss.xml", "Crypto", 3
         )
     )
     return news_pool
@@ -215,108 +183,83 @@ def filtrer_et_analyser_avec_ia(news_pool):
     if not news_pool or not GEMINI_API_KEY:
         return None
 
-    articles_payload = []
+    articles_text = ""
     for i, a in enumerate(news_pool, 1):
-        articles_payload.append(
-            f"ID:{i} | THÈME:{a['category']} | TITRE:{a['title']} | RÉSUMÉ:{a['desc']} | URL:{a['link']}"
-        )
-    articles_text = "\n".join(articles_payload)
+        articles_text += f"[{i}] {a['category']} | Titre: {a['title']} | URL: {a['link']}\n"
 
     prompt = (
-        "Tu es un analyste quantitatif et macro senior préparant un rapport de marché exécutif pour des traders institutionnels.\n"
-        "Voici le flux de dépêches brutes :\n"
-        f"{articles_text}\n\n"
-        "Consignes impératives :\n"
-        "1. Sélectionne exactement 3 événements à fort impact (1 Géopolitique, 1 Macro/Taux, 1 Crypto).\n"
-        "2. Pour chaque événement, produis une analyse poussée comprenant :\n"
-        "   - 'id' : l'ID d'origine (1 à 9)\n"
-        "   - 'category' : libellé court en majuscules (ex: 'GÉOPOLITIQUE // STRATÉGIE', 'MACRO // LIQUIDITÉ', 'CRYPTO // VOLATILITÉ')\n"
-        "   - 'title' : titre incisif et professionnel en français\n"
-        "   - 'summary' : analyse dense de 3 à 4 phrases détaillant la mécanique sous-jacente, les répercussions immédiates sur les spreads, taux réels ou la liquidité, et les points de vigilance pour la session.\n"
-        "   - 'link' : l'URL exacte correspondante\n\n"
-        "Renvoie STRICTEMENT un tableau JSON de 3 objets."
+        "Tu es un analyste financier macro senior pour un briefing matinal.\n"
+        f"Voici les actualites brutes :\n\n{articles_text}\n\n"
+        "Choisis exactement 3 evenements prioritaires (idealement 1 Geopolitique, 1 Macro/Taux, 1 Crypto).\n"
+        "Pour chacun, remplis cet objet JSON :\n"
+        "- category : un badge court avec emoji (ex: '🌍 Géopolitique', '🏛️ Macro & Fed', '⚡ Crypto')\n"
+        "- title : un titre percutant en francais\n"
+        "- summary : un resume de 2 phrases percutantes sur les implications de marche\n"
+        "- link : l'URL exacte reprise de la liste d'origine\n\n"
+        "Renvoie STRICTEMENT un tableau JSON de 3 elements : [ {category, title, summary, link}, ... ]"
     )
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": GEMINI_API_KEY,
-    }
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.15,
+            "temperature": 0.2,
         },
     }
+    headers = {"Content-Type": "application/json"}
 
-    # Modèles cibles opérationnels
+    # Les deux seuls identifiants reconnus et actifs sur ton endpoint v1beta
     modeles_cibles = ["gemini-flash-latest", "gemini-pro-latest"]
-    
-    # Temporisations poussées : 20s, 40s, puis 60s pour franchir les goulots d'étranglement
-    pauses = [20, 40, 60]
+    pauses = [4, 8, 15]
 
     for model in modeles_cibles:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
 
         for tentative, pause in enumerate(pauses, 1):
             try:
                 print(f"Appel {model} (tentative {tentative}/{len(pauses)})...")
-                r = requests.post(url, headers=headers, json=payload, timeout=50)
+                r = requests.post(url, headers=headers, json=payload, timeout=30)
 
                 if r.status_code == 200:
                     data = r.json()
                     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
                     output = extraire_json_valide(parts[0].get("text", ""))
                     if output:
-                        # Associe les images d'origine correspondantes aux articles choisis
-                        for item_ia in output:
-                            url_ia = item_ia.get("link", "")
-                            match_source = next((x for x in news_pool if x["link"] == url_ia), None)
-                            if match_source and match_source.get("image"):
-                                item_ia["image"] = match_source["image"]
-                            else:
-                                item_ia["image"] = None
-
-                        print(f"{Fore.GREEN}✔ Synthèse analytique réussie avec {model} !")
+                        print(f"{Fore.GREEN}✔ Synthèse réussie avec {model} !")
                         return output
 
                 if r.status_code in [429, 503]:
-                    print(f"Saturation Google ({r.status_code}) sur {model}. Pause tactique de {pause}s...")
+                    print(f"Pic de charge ({r.status_code}) sur {model}. Attente de {pause}s...")
                     time.sleep(pause)
                 else:
-                    print(f"Erreur HTTP {r.status_code} sur {model} : {r.text[:100]}")
+                    print(f"Erreur HTTP {r.status_code} sur {model}")
                     break
-
-            except requests.exceptions.Timeout:
-                print(f"Timeout réseau ({pause}s d'attente avant reprise)...")
-                time.sleep(pause)
             except Exception as e:
-                print(f"Erreur inattendue sur {model} : {e}")
+                print(f"Erreur réseau sur {model} : {e}")
                 time.sleep(pause)
 
-    print(f"{Fore.YELLOW}⚠️ Serveurs IA indisponibles après délais complets. Bascule sur le flux brut.")
+    print(f"{Fore.YELLOW}⚠️ Serveurs saturés après plusieurs essais. Bascule sur la sélection directe.")
     fallback_news = []
     for item in news_pool[:3]:
         fallback_news.append({
-            "category": f"FLUX DIRECT // {item['category'].upper()}",
+            "category": f"📰 {item['category']}",
             "title": item["title"],
-            "summary": item["desc"] or "Synthèse directe indisponible. Consultez la dépêche complète via le lien.",
+            "summary": item["desc"] or "Consultez le lien officiel pour l'intégralité de la dépêche.",
             "link": item["link"],
-            "image": item.get("image"),
         })
     return fallback_news
 
 
 def get_color_html(valeur):
     if valeur is None:
-        return "#64748b", "N/A"
+        return "#888888", "N/A"
     signe = "+" if valeur >= 0 else ""
-    couleur = "#00e676" if valeur >= 0 else "#ff1744"
+    couleur = "#00c853" if valeur >= 0 else "#ff5252"
     return couleur, f"{signe}{valeur:.2f}%"
 
 
 def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
-    maintenant = datetime.now().strftime("%d %b %Y | %H:%M UTC")
+    maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
     btc = cg.get("bitcoin", {"usd": 0.0, "usd_24h_change": 0.0})
     eth = cg.get("ethereum", {"usd": 0.0, "usd_24h_change": 0.0})
 
@@ -328,167 +271,113 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     for label, (px, var) in tradfi.items():
         if px is not None:
             c, v = get_color_html(var)
-            devise = "pts" if label == "S&P 500" else "USD"
+            devise = "pts" if label == "S&P 500" else "USDC"
             valeur_str = f"{px:,.2f} {devise}"
         else:
-            c, v = "#64748b", "N/A"
+            c, v = "#888888", "N/A"
             valeur_str = "Indisponible"
 
-        lignes_tradfi_html += f"""
-        <tr style="border-bottom: 1px solid #161f30;">
-          <td style="padding: 10px 14px; color: #94a3b8; font-size: 12px; font-weight: 500; letter-spacing: 0.5px;">{label.upper()}</td>
-          <td style="padding: 10px 14px; text-align: right; color: #f8fafc; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{valeur_str}</td>
-          <td style="padding: 10px 14px; text-align: right; color: {c}; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{v}</td>
-        </tr>
-        """
+        lignes_tradfi_html += (
+            "<tr>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39;'>{label}</td>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;'>{valeur_str}</td>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c}; font-weight: bold;'>{v}</td>"
+            "</tr>"
+        )
 
-    # Génération des blocs d'articles avec visuels
-    news_cards_html = ""
+    news_blocks_html = ""
     if ai_curated_news:
         for item in ai_curated_news:
-            cat = item.get("category", "RAPPORT DE SESSION")
+            cat = item.get("category", "ACTUALITÉ")
             link = item.get("link", "#")
             title = item.get("title", "")
             summary = item.get("summary", "")
-            img_src = item.get("image")
-
-            img_html = ""
-            if img_src:
-                img_html = f"""
-                <div style="margin-bottom: 12px; overflow: hidden; border-radius: 6px; border: 1px solid #1e293b; max-height: 190px;">
-                  <img src="{img_src}" alt="Vignette" style="width: 100%; height: auto; display: block; object-fit: cover;" />
-                </div>
-                """
-
-            news_cards_html += f"""
-            <div style="background-color: #0b0f19; border: 1px solid #1a2333; border-radius: 8px; padding: 18px; margin-bottom: 16px;">
-              {img_html}
-              <div style="display: inline-block; padding: 3px 8px; background-color: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.25); border-radius: 4px; color: #00f0ff; font-size: 10px; font-weight: 700; letter-spacing: 1px; margin-bottom: 8px;">
-                {cat}
-              </div>
-              <a href="{link}" target="_blank" style="color: #f1f5f9; text-decoration: none; font-size: 15px; font-weight: 700; line-height: 1.4; display: block; margin-bottom: 8px;">
-                {title} →
-              </a>
-              <p style="color: #94a3b8; font-size: 13px; line-height: 1.6; margin: 0; text-align: justify;">
-                {summary}
-              </p>
-            </div>
-            """
+            news_blocks_html += (
+                "<div style='margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #21262d;'>"
+                f"<span style='color: #f0883e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;'>{cat}</span>"
+                f"<a href='{link}' target='_blank' style='color: #58a6ff; text-decoration: none; font-size: 13px; font-weight: bold; line-height: 1.4; display: block; margin-top: 3px;'>{title}</a>"
+                f"<p style='color: #c9d1d9; font-size: 12px; margin: 4px 0 0 0; line-height: 1.45;'>{summary}</p>"
+                "</div>"
+            )
+    else:
+        news_blocks_html = (
+            "<p style='color: #8b949e; font-size: 12px; margin: 0;'>Synthèse d'actualités temporairement indisponible.</p>"
+        )
 
     jour_annee = datetime.now().timetuple().tm_yday
     brief_du_jour = LEGAL_BRIEFS[jour_annee % len(LEGAL_BRIEFS)]
 
+    legal_block_html = f"""
+    <h3 style="color: #58a6ff; font-size: 14px; text-transform: uppercase; margin-top: 24px; margin-bottom: 10px;">
+      ⚖️ Le Point Droit Financier : {brief_du_jour.get('title', '')}
+    </h3>
+    <div style="background-color: #0d1117; border-left: 3px solid #58a6ff; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
+      <span style="color: #79c0ff; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+        Thème : {brief_du_jour.get('category', '')}
+      </span>
+      <p style="color: #c9d1d9; font-size: 12px; margin: 6px 0 8px 0; line-height: 1.45;">
+        {brief_du_jour.get('summary', '')}
+      </p>
+      <div style="background-color: #161b22; border-radius: 4px; padding: 8px 10px; border: 1px solid #30363d;">
+        <span style="color: #f0883e; font-size: 11px; font-weight: bold;">À RETENIR :</span>
+        <span style="color: #8b949e; font-size: 11px; line-height: 1.4;"> {brief_du_jour.get('takeaway', '')}</span>
+      </div>
+    </div>
+    """
+
     btc_px = btc.get("usd", 0.0)
     eth_px = eth.get("usd", 0.0)
     hype_display = f"{hype_px:,.2f} USDC" if hype_px is not None else "N/A"
-    fng_val = fng.get("value", "50")
-    fng_class = fng.get("value_classification", "Neutral").upper()
+    fng_val = fng.get("value", "N/A")
+    fng_class = fng.get("value_classification", "")
 
-    # Thème futuriste / Terminal quantitatif
     html_content = f"""<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin: 0; padding: 24px 10px; background-color: #030712; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc;">
-  <div style="max-width: 580px; margin: 0 auto; background-color: #070b14; border: 1px solid #162032; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.85);">
-    
-    <!-- HEADER // TERMINAL STYLE -->
-    <div style="background: linear-gradient(180deg, #0d1527 0%, #070b14 100%); padding: 24px 20px; border-bottom: 1px solid #162032; text-align: left;">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
-        <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px; color: #00f0ff; letter-spacing: 2px; font-weight: 700; text-transform: uppercase;">● CRYPTOPULSE // INTELLIGENCE</span>
-        <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px; color: #475569;">{maintenant}</span>
-      </div>
-      <h1 style="margin: 4px 0 0 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; color: #ffffff;">
-        Morning Quantitative Brief
-      </h1>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0d1117; color: #c9d1d9; padding: 20px;">
+  <div style="max-width: 520px; margin: auto; background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; padding: 20px;">
+    <h2 style="color: #58a6ff; margin-top: 0; text-align: center; border-bottom: 1px solid #30363d; padding-bottom: 12px;">
+      ☕ Morning Pulse : Marchés & Stratégie
+    </h2>
+    <p style="text-align: center; color: #8b949e; font-size: 13px; margin-top: -6px;">{maintenant}</p>
+
+    <div style="background-color: #21262d; border-radius: 6px; padding: 12px; margin-bottom: 20px; text-align: center;">
+      <span style="color: #8b949e; font-size: 12px; text-transform: uppercase;">Fear & Greed Index</span><br>
+      <strong style="font-size: 18px; color: #f0883e;">{fng_val}/100</strong> 
+      <span style="color: #c9d1d9;">({fng_class})</span>
     </div>
 
-    <div style="padding: 20px;">
-      
-      <!-- SENTIMENT RADAR -->
-      <div style="background-color: #0b1120; border: 1px solid #1a263d; border-radius: 8px; padding: 14px 16px; margin-bottom: 22px;">
-        <table style="width: 100%; border-collapse: collapse;">
-          <tr>
-            <td style="color: #64748b; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;">Index de Sentiment (Fear & Greed)</td>
-            <td style="text-align: right;">
-              <span style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 16px; font-weight: 800; color: #f59e0b;">{fng_val}</span>
-              <span style="color: #64748b; font-size: 12px;"> / 100</span>
-              <span style="margin-left: 8px; font-size: 11px; font-weight: 700; color: #94a3b8; background-color: #162032; padding: 2px 6px; border-radius: 4px;">{fng_class}</span>
-            </td>
-          </tr>
-        </table>
-      </div>
+    <h3 style="color: #e3b341; font-size: 14px; text-transform: uppercase; margin-bottom: 8px;">Crypto Actifs (USDC)</h3>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
+      <tr>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39;">Bitcoin (BTC)</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;">{btc_px:,.2f} USDC</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c_btc}; font-weight: bold;">{v_btc}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39;">Ethereum (ETH)</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;">{eth_px:,.2f} USDC</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c_eth}; font-weight: bold;">{v_eth}</td>
+      </tr>
+      <tr>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39;">Hyperliquid (HYPE)</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;">{hype_display}</td>
+        <td style="padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c_hype}; font-weight: bold;">{v_hype}</td>
+      </tr>
+    </table>
 
-      <!-- CARNET DE MARCHÉ 1 : CRYPTO-ACTIFS -->
-      <div style="margin-bottom: 22px;">
-        <div style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px; font-weight: 700; color: #38bdf8; letter-spacing: 1.5px; margin-bottom: 8px; text-transform: uppercase;">
-          // MATRICE DES ACTIFS NUMÉRIQUES
-        </div>
-        <table style="width: 100%; border-collapse: collapse; background-color: #090e1a; border: 1px solid #162032; border-radius: 8px; overflow: hidden;">
-          <tr style="border-bottom: 1px solid #161f30;">
-            <td style="padding: 10px 14px; color: #94a3b8; font-size: 12px; font-weight: 500;">BITCOIN (BTC)</td>
-            <td style="padding: 10px 14px; text-align: right; color: #f8fafc; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{btc_px:,.2f} USDC</td>
-            <td style="padding: 10px 14px; text-align: right; color: {c_btc}; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{v_btc}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #161f30;">
-            <td style="padding: 10px 14px; color: #94a3b8; font-size: 12px; font-weight: 500;">ETHEREUM (ETH)</td>
-            <td style="padding: 10px 14px; text-align: right; color: #f8fafc; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{eth_px:,.2f} USDC</td>
-            <td style="padding: 10px 14px; text-align: right; color: {c_eth}; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{v_eth}</td>
-          </tr>
-          <tr>
-            <td style="padding: 10px 14px; color: #94a3b8; font-size: 12px; font-weight: 500;">HYPERLIQUID (HYPE)</td>
-            <td style="padding: 10px 14px; text-align: right; color: #f8fafc; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{hype_display}</td>
-            <td style="padding: 10px 14px; text-align: right; color: {c_hype}; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 13px; font-weight: 700;">{v_hype}</td>
-          </tr>
-        </table>
-      </div>
+    <h3 style="color: #58a6ff; font-size: 14px; text-transform: uppercase; margin-bottom: 8px;">TradFi & Commodities</h3>
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 14px;">
+      {lignes_tradfi_html}
+    </table>
 
-      <!-- CARNET DE MARCHÉ 2 : TRADFI & MACRO -->
-      <div style="margin-bottom: 26px;">
-        <div style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px; font-weight: 700; color: #a855f7; letter-spacing: 1.5px; margin-bottom: 8px; text-transform: uppercase;">
-          // BENCHMARKS TRADFI & MATIÈRES PREMIÈRES
-        </div>
-        <table style="width: 100%; border-collapse: collapse; background-color: #090e1a; border: 1px solid #162032; border-radius: 8px; overflow: hidden;">
-          {lignes_tradfi_html}
-        </table>
-      </div>
-
-      <!-- SÉLECTION ANALYTIQUE DES ARTICLES -->
-      <div style="margin-bottom: 26px;">
-        <div style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px; font-weight: 700; color: #f43f5e; letter-spacing: 1.5px; margin-bottom: 12px; text-transform: uppercase;">
-          // DÉPÊCHES STRATÉGIQUES & ANALYSE D'IMPACT
-        </div>
-        {news_cards_html}
-      </div>
-
-      <!-- CADRE JURIDIQUE & RÉGULATION -->
-      <div style="background-color: #080d1a; border: 1px solid #1e293b; border-left: 3px solid #38bdf8; border-radius: 8px; padding: 16px;">
-        <div style="font-family: 'JetBrains Mono', Consolas, monospace; font-size: 10px; font-weight: 700; color: #38bdf8; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px;">
-          POINT DE DROIT FINANCIER // {brief_du_jour.get('category', '').upper()}
-        </div>
-        <div style="font-size: 14px; font-weight: 700; color: #f1f5f9; margin-bottom: 8px;">
-          {brief_du_jour.get('title', '')}
-        </div>
-        <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin: 0 0 10px 0;">
-          {brief_du_jour.get('summary', '')}
-        </p>
-        <div style="background-color: #020617; border: 1px solid #162032; border-radius: 6px; padding: 8px 12px;">
-          <span style="color: #f59e0b; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 10px; font-weight: 700;">SYNTHÈSE JURIDIQUE :</span>
-          <span style="color: #cbd5e1; font-size: 11px; line-height: 1.4;"> {brief_du_jour.get('takeaway', '')}</span>
-        </div>
-      </div>
-
+    <h3 style="color: #ff7b72; font-size: 14px; text-transform: uppercase; margin-bottom: 10px;">
+      🎯 Les 3 Développements Clés (Sélection IA)
+    </h3>
+    <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
+      {news_blocks_html}
     </div>
 
-    <!-- FOOTER -->
-    <div style="border-top: 1px solid #162032; padding: 14px 20px; background-color: #050811; text-align: center;">
-      <p style="margin: 0; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 10px; color: #475569; letter-spacing: 1px;">
-        CRYPTOPULSE AUTOMATED SYSTEM // NO INVESTMENT ADVICE
-      </p>
-    </div>
-
+    {legal_block_html}
   </div>
 </body>
 </html>"""
@@ -501,14 +390,14 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     payload = {
         "from": "CryptoPulse <onboarding@resend.dev>",
         "to": [RECEIVER_EMAIL],
-        "subject": f"[PULSE] BTC: ${btc_px:,.0f} | F&G: {fng_val} | Macro Alert",
+        "subject": f"Briefing Matin - BTC: {btc_px:,.0f}$ | Fear: {fng_val}",
         "html": html_content,
     }
 
     try:
         res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code in [200, 201]:
-            print(f"{Fore.GREEN}✔ Briefing exécutif expédié avec succès !")
+            print(f"{Fore.GREEN}✔ Briefing envoyé avec succès !")
         else:
             print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
     except Exception as e:
@@ -520,7 +409,7 @@ def main():
     hype_px, hype_var = fetch_hype_hyperliquid()
     tradfi = fetch_tradfi()
 
-    print("Collecte du pool d'actualités brutes (avec extraction multimédia)...")
+    print("Collecte du pool d'actualités brutes...")
     raw_news = collect_raw_news()
 
     print("Analyse, sélection et synthèse par IA...")
