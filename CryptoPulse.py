@@ -15,6 +15,7 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RECEIVER_EMAIL = os.getenv("EMAIL_RECEIVER")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # =================================================
 
 
@@ -155,47 +156,28 @@ def collect_raw_news():
     return news_pool
 
 
-def appeler_groq_llama(prompt):
-    if not GROQ_API_KEY:
-        print("Clé GROQ_API_KEY absente, passage du secours Groq.")
+def extraire_json_valide(texte):
+    if not texte:
         return None
-
-    print("Bascule sur le fournisseur de secours : Groq (Llama 3.3)...")
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Tu es un analyste financier macro senior. Réponds TOUJOURS par un tableau JSON valide de 3 objets avec les champs : category, title, summary, link.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.2,
-    }
-
+    texte = texte.strip()
+    match = re.search(r"\[.*\]", texte, re.DOTALL)
+    if match:
+        try:
+            res = json.loads(match.group(0))
+            if isinstance(res, list) and len(res) > 0:
+                return res
+        except Exception:
+            pass
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=20)
-        if res.status_code == 200:
-            content = res.json()["choices"][0]["message"]["content"].strip()
-            json_match = re.search(r"\[.*\]", content, re.DOTALL)
-            parsed = json.loads(json_match.group(0)) if json_match else json.loads(content)
-            
-            if isinstance(parsed, dict):
-                for val in parsed.values():
-                    if isinstance(val, list):
-                        return val
-            elif isinstance(parsed, list):
-                return parsed
-        else:
-            print(f"Erreur Groq ({res.status_code}) : {res.text[:120]}")
-    except Exception as e:
-        print(f"Exception Groq : {e}")
-
+        parsed = json.loads(texte)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list) and len(v) > 0:
+                    return v
+    except Exception:
+        pass
     return None
 
 
@@ -219,55 +201,133 @@ def filtrer_et_analyser_avec_ia(news_pool):
         "Renvoie STRICTEMENT un tableau JSON de 3 elements : [ {category, title, summary, link}, ... ]"
     )
 
-    # 1. Tentatives via Gemini (modèles texte valides uniquement)
+    # ==========================================================
+    # BATTERIE 1 : GEMINI (Multi-endpoints v1/v1beta + 10 modèles)
+    # ==========================================================
     if GEMINI_API_KEY:
-        headers = {"Content-Type": "application/json"}
-        payload = {
+        gemini_combinaisons = [
+            ("v1beta", "gemini-2.5-flash"),
+            ("v1beta", "gemini-2.0-flash"),
+            ("v1", "gemini-2.5-flash"),
+            ("v1", "gemini-2.0-flash"),
+            ("v1beta", "gemini-flash-latest"),
+            ("v1beta", "gemini-pro-latest"),
+            ("v1", "gemini-flash-latest"),
+            ("v1", "gemini-pro-latest"),
+            ("v1beta", "gemini-1.5-flash-latest"),
+            ("v1beta", "gemini-1.5-flash"),
+            ("v1", "gemini-1.5-flash"),
+            ("v1beta", "gemini-1.5-pro"),
+        ]
+
+        payload_gemini = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0.2,
             },
         }
+        headers_gemini = {"Content-Type": "application/json"}
 
-        # On cible directement les modèles textuels stables
-        modeles_gemini = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
-
-        for nom_modele in modeles_gemini:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{nom_modele}:generateContent?key={GEMINI_API_KEY}"
-            print(f"Tentative Gemini avec {nom_modele}...")
-
+        for version, model in gemini_combinaisons:
+            url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={GEMINI_API_KEY}"
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=25)
-                if res.status_code == 200:
-                    data = res.json()
+                r = requests.post(url, headers=headers_gemini, json=payload_gemini, timeout=15)
+                if r.status_code == 200:
+                    data = r.json()
                     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
-                    raw_output = parts[0].get("text", "").strip() if parts else ""
-                    if raw_output:
-                        json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
-                        parsed = json.loads(json_match.group(0)) if json_match else json.loads(raw_output)
-                        if isinstance(parsed, list) and len(parsed) > 0:
-                            print(f"{Fore.GREEN}✔ Synthèse réussie avec {nom_modele}")
-                            return parsed
-
-                print(f"Échec Gemini ({nom_modele} - code {res.status_code})")
+                    output = extraire_json_valide(parts[0].get("text", ""))
+                    if output:
+                        print(f"{Fore.GREEN}✔ Synthèse réussie avec Gemini ({version}/{model})")
+                        return output
+                elif r.status_code in [429, 503]:
+                    print(f"Saturation {model} ({r.status_code}), passage au suivant...")
+                else:
+                    print(f"Échec {model} sur {version} ({r.status_code})")
             except Exception as e:
-                print(f"Erreur d'appel Gemini ({nom_modele}) : {e}")
+                print(f"Erreur réseau sur {model} : {e}")
 
-    # 2. Secours automatique sur Groq si Gemini échoue ou sature
-    news_groq = appeler_groq_llama(prompt)
-    if news_groq:
-        print(f"{Fore.GREEN}✔ Synthèse réussie avec Groq !")
-        return news_groq
+    # ==========================================================
+    # BATTERIE 2 : GROQ (Llama 3.3, Llama 3.1, Mixtral)
+    # ==========================================================
+    if GROQ_API_KEY:
+        groq_modeles = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "llama3-70b-8192",
+            "mixtral-8x7b-32768",
+        ]
+        headers_groq = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        for gm in groq_modeles:
+            print(f"Tentative Groq avec {gm}...")
+            payload_groq = {
+                "model": gm,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Tu es un analyste financier senior. Réponds TOUJOURS par un tableau JSON valide de 3 objets.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+            }
+            try:
+                r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers_groq, json=payload_groq, timeout=15)
+                if r.status_code == 200:
+                    content = r.json()["choices"][0]["message"]["content"]
+                    output = extraire_json_valide(content)
+                    if output:
+                        print(f"{Fore.GREEN}✔ Synthèse réussie avec Groq ({gm})")
+                        return output
+                else:
+                    print(f"Échec Groq {gm} ({r.status_code})")
+            except Exception as e:
+                print(f"Erreur Groq {gm} : {e}")
 
-    # 3. Fallback ultime si toutes les IA échouent
-    print(f"{Fore.YELLOW}⚠️ Toutes les IA sont indisponibles. Bascule sur le flux brut.")
+    # ==========================================================
+    # BATTERIE 3 : OPENROUTER (Modèles gratuits)
+    # ==========================================================
+    if OPENROUTER_API_KEY:
+        openrouter_modeles = [
+            "google/gemini-2.0-flash-exp:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "qwen/qwen-2.5-72b-instruct:free",
+        ]
+        headers_or = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        for or_m in openrouter_modeles:
+            print(f"Tentative OpenRouter avec {or_m}...")
+            payload_or = {
+                "model": or_m,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+            }
+            try:
+                r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers_or, json=payload_or, timeout=20)
+                if r.status_code == 200:
+                    content = r.json()["choices"][0]["message"]["content"]
+                    output = extraire_json_valide(content)
+                    if output:
+                        print(f"{Fore.GREEN}✔ Synthèse réussie avec OpenRouter ({or_m})")
+                        return output
+            except Exception as e:
+                print(f"Erreur OpenRouter {or_m} : {e}")
+
+    # ==========================================================
+    # BATTERIE 4 : SECOURS BRUT ENRICHI (Zéro IA, 100 % fiable)
+    # ==========================================================
+    print(f"{Fore.YELLOW}⚠️ Tous les services IA ont échoué. Bascule sur la sélection directe.")
     fallback_news = []
     for item in news_pool[:3]:
         fallback_news.append({
             "category": f"📰 {item['category']}",
             "title": item["title"],
-            "summary": item["desc"] or "Consultez l'article pour les détails financiers.",
+            "summary": item["desc"] or "Consultez le lien officiel pour l'intégralité de la dépêche.",
             "link": item["link"],
         })
     return fallback_news
