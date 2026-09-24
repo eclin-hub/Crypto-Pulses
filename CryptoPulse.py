@@ -14,8 +14,6 @@ init(autoreset=True)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RECEIVER_EMAIL = os.getenv("EMAIL_RECEIVER")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 # =================================================
 
 
@@ -182,7 +180,7 @@ def extraire_json_valide(texte):
 
 
 def filtrer_et_analyser_avec_ia(news_pool):
-    if not news_pool:
+    if not news_pool or not GEMINI_API_KEY:
         return None
 
     articles_text = ""
@@ -201,127 +199,46 @@ def filtrer_et_analyser_avec_ia(news_pool):
         "Renvoie STRICTEMENT un tableau JSON de 3 elements : [ {category, title, summary, link}, ... ]"
     )
 
-    # ==========================================================
-    # BATTERIE 1 : GEMINI (Multi-endpoints v1/v1beta + 10 modèles)
-    # ==========================================================
-    if GEMINI_API_KEY:
-        gemini_combinaisons = [
-            ("v1beta", "gemini-2.5-flash"),
-            ("v1beta", "gemini-2.0-flash"),
-            ("v1", "gemini-2.5-flash"),
-            ("v1", "gemini-2.0-flash"),
-            ("v1beta", "gemini-flash-latest"),
-            ("v1beta", "gemini-pro-latest"),
-            ("v1", "gemini-flash-latest"),
-            ("v1", "gemini-pro-latest"),
-            ("v1beta", "gemini-1.5-flash-latest"),
-            ("v1beta", "gemini-1.5-flash"),
-            ("v1", "gemini-1.5-flash"),
-            ("v1beta", "gemini-1.5-pro"),
-        ]
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.2,
+        },
+    }
+    headers = {"Content-Type": "application/json"}
 
-        payload_gemini = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.2,
-            },
-        }
-        headers_gemini = {"Content-Type": "application/json"}
+    # Les deux seuls identifiants reconnus et actifs sur ton endpoint v1beta
+    modeles_cibles = ["gemini-flash-latest", "gemini-pro-latest"]
+    pauses = [4, 8, 15]
 
-        for version, model in gemini_combinaisons:
-            url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    for model in modeles_cibles:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+
+        for tentative, pause in enumerate(pauses, 1):
             try:
-                r = requests.post(url, headers=headers_gemini, json=payload_gemini, timeout=15)
+                print(f"Appel {model} (tentative {tentative}/{len(pauses)})...")
+                r = requests.post(url, headers=headers, json=payload, timeout=30)
+
                 if r.status_code == 200:
                     data = r.json()
                     parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
                     output = extraire_json_valide(parts[0].get("text", ""))
                     if output:
-                        print(f"{Fore.GREEN}✔ Synthèse réussie avec Gemini ({version}/{model})")
+                        print(f"{Fore.GREEN}✔ Synthèse réussie avec {model} !")
                         return output
-                elif r.status_code in [429, 503]:
-                    print(f"Saturation {model} ({r.status_code}), passage au suivant...")
+
+                if r.status_code in [429, 503]:
+                    print(f"Pic de charge ({r.status_code}) sur {model}. Attente de {pause}s...")
+                    time.sleep(pause)
                 else:
-                    print(f"Échec {model} sur {version} ({r.status_code})")
+                    print(f"Erreur HTTP {r.status_code} sur {model}")
+                    break
             except Exception as e:
                 print(f"Erreur réseau sur {model} : {e}")
+                time.sleep(pause)
 
-    # ==========================================================
-    # BATTERIE 2 : GROQ (Llama 3.3, Llama 3.1, Mixtral)
-    # ==========================================================
-    if GROQ_API_KEY:
-        groq_modeles = [
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "mixtral-8x7b-32768",
-        ]
-        headers_groq = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        for gm in groq_modeles:
-            print(f"Tentative Groq avec {gm}...")
-            payload_groq = {
-                "model": gm,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Tu es un analyste financier senior. Réponds TOUJOURS par un tableau JSON valide de 3 objets.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.2,
-            }
-            try:
-                r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers_groq, json=payload_groq, timeout=15)
-                if r.status_code == 200:
-                    content = r.json()["choices"][0]["message"]["content"]
-                    output = extraire_json_valide(content)
-                    if output:
-                        print(f"{Fore.GREEN}✔ Synthèse réussie avec Groq ({gm})")
-                        return output
-                else:
-                    print(f"Échec Groq {gm} ({r.status_code})")
-            except Exception as e:
-                print(f"Erreur Groq {gm} : {e}")
-
-    # ==========================================================
-    # BATTERIE 3 : OPENROUTER (Modèles gratuits)
-    # ==========================================================
-    if OPENROUTER_API_KEY:
-        openrouter_modeles = [
-            "google/gemini-2.0-flash-exp:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "qwen/qwen-2.5-72b-instruct:free",
-        ]
-        headers_or = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        for or_m in openrouter_modeles:
-            print(f"Tentative OpenRouter avec {or_m}...")
-            payload_or = {
-                "model": or_m,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2,
-            }
-            try:
-                r = requests.post("https://openrouter.ai/api/v1/chat/completions", headers=headers_or, json=payload_or, timeout=20)
-                if r.status_code == 200:
-                    content = r.json()["choices"][0]["message"]["content"]
-                    output = extraire_json_valide(content)
-                    if output:
-                        print(f"{Fore.GREEN}✔ Synthèse réussie avec OpenRouter ({or_m})")
-                        return output
-            except Exception as e:
-                print(f"Erreur OpenRouter {or_m} : {e}")
-
-    # ==========================================================
-    # BATTERIE 4 : SECOURS BRUT ENRICHI (Zéro IA, 100 % fiable)
-    # ==========================================================
-    print(f"{Fore.YELLOW}⚠️ Tous les services IA ont échoué. Bascule sur la sélection directe.")
+    print(f"{Fore.YELLOW}⚠️ Serveurs saturés après plusieurs essais. Bascule sur la sélection directe.")
     fallback_news = []
     for item in news_pool[:3]:
         fallback_news.append({
