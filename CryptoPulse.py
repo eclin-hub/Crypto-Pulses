@@ -162,13 +162,6 @@ def filtrer_et_analyser_avec_ia(news_pool):
         "Renvoie STRICTEMENT un tableau JSON de 3 elements."
     )
 
-    # Modèles par ordre de priorité : principal -> alternatif -> ultra-léger de secours
-    modeles_fallback = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ]
-
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -178,14 +171,36 @@ def filtrer_et_analyser_avec_ia(news_pool):
         },
     }
 
-    for nom_modele in modeles_fallback:
+    # Récupération dynamique des modèles disponibles sur la clé API
+    modeles_valides = []
+    try:
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        r = requests.get(list_url, timeout=10)
+        if r.status_code == 200:
+            data = r.json().get("models", [])
+            for m in data:
+                nom = m.get("name", "").replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods:
+                    if "flash" in nom:
+                        modeles_valides.insert(0, nom)
+                    else:
+                        modeles_valides.append(nom)
+    except Exception as e:
+        print(f"Impossible de lister les modèles en ligne : {e}")
+
+    if not modeles_valides:
+        modeles_valides = ["gemini-flash-latest", "gemini-pro-latest", "gemini-flash"]
+
+    print(f"Modèles prêts : {modeles_valides[:3]}")
+
+    for nom_modele in modeles_valides[:3]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{nom_modele}:generateContent?key={GEMINI_API_KEY}"
         print(f"Tentative d'analyse avec {nom_modele}...")
 
-        # 2 essais par modèle avec pause intermédiaire
         for tentative in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=40)
+                res = requests.post(url, headers=headers, json=payload, timeout=45)
                 if res.status_code == 200:
                     data = res.json()
                     raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
@@ -195,21 +210,20 @@ def filtrer_et_analyser_avec_ia(news_pool):
                     return parsed
 
                 if res.status_code in [429, 500, 503]:
-                    print(f"Charge élevée sur {nom_modele} ({res.status_code}). Pause de 6s...")
+                    print(f"Charge élevée sur {nom_modele} ({res.status_code}). Pause 6s...")
                     time.sleep(6)
                 else:
-                    print(f"Code inattendu sur {nom_modele} ({res.status_code}) : {res.text[:120]}")
+                    print(f"Code {res.status_code} sur {nom_modele} : {res.text[:120]}")
                     break
 
             except requests.exceptions.Timeout:
-                print(f"Timeout sur {nom_modele}. Nouvelle tentative...")
+                print(f"Timeout sur {nom_modele}...")
                 time.sleep(4)
             except Exception as e:
-                print(f"Erreur sur {nom_modele} : {e}")
-                time.sleep(3)
+                print(f"Erreur d'exécution : {e}")
+                time.sleep(2)
 
-    print(f"{Fore.YELLOW}⚠️ Tous les modèles Gemini ont échoué. Bascule sur le flux brut.")
-    # Fallback propre : prend les 3 premiers articles bruts si l'API est totalement injoignable
+    print(f"{Fore.YELLOW}⚠️ Tous les modèles ont échoué. Bascule sur le flux brut.")
     fallback_news = []
     for item in news_pool[:3]:
         fallback_news.append({
@@ -270,7 +284,6 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
             "<p style='color: #8b949e; font-size: 12px; margin: 0;'>Synthèse d'actualités temporairement indisponible.</p>"
         )
 
-    # Notion juridique du jour
     jour_annee = datetime.now().timetuple().tm_yday
     brief_du_jour = LEGAL_BRIEFS[jour_annee % len(LEGAL_BRIEFS)]
 
@@ -340,7 +353,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     <h3 style="color: #ff7b72; font-size: 14px; text-transform: uppercase; margin-bottom: 10px;">
       🎯 Les 3 Développements Clés (Sélection IA)
     </h3>
-    <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
+    <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border-1px solid #30363d;">
       {news_blocks_html}
     </div>
 
