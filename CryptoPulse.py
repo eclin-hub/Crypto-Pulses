@@ -146,7 +146,6 @@ def filtrer_et_analyser_avec_ia(news_pool):
     if not GEMINI_API_KEY or not news_pool:
         return None
 
-    # Synthèse concise des titres pour une réponse ultra rapide
     articles_text = ""
     for i, a in enumerate(news_pool, 1):
         articles_text += f"[{i}] {a['category']} | Titre: {a['title']} | URL: {a['link']}\n"
@@ -163,45 +162,63 @@ def filtrer_et_analyser_avec_ia(news_pool):
         "Renvoie STRICTEMENT un tableau JSON de 3 elements."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
+    # Modèles par ordre de priorité : principal -> alternatif -> ultra-léger de secours
+    modeles_fallback = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+    ]
+
     headers = {"Content-Type": "application/json"}
-    
-    # Configuration avec sortie JSON forcée pour éliminer toute hésitation du modèle
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseMimeType": "application/json",
-            "temperature": 0.2
-        }
+            "temperature": 0.2,
+        },
     }
 
-    for attempt in range(3):
-        try:
-            # Timeout à 60s pour absorber les éventuels pics de latence Google
-            res = requests.post(url, headers=headers, json=payload, timeout=60)
-            if res.status_code == 200:
-                data = res.json()
-                raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
-                if json_match:
-                    return json.loads(json_match.group(0))
-                return json.loads(raw_output)
+    for nom_modele in modeles_fallback:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{nom_modele}:generateContent?key={GEMINI_API_KEY}"
+        print(f"Tentative d'analyse avec {nom_modele}...")
 
-            if res.status_code in [503, 429]:
-                print(f"Serveur Gemini en pic de charge ({res.status_code}). Nouvelle tentative dans 5s (essai {attempt+1}/3)...")
-                time.sleep(5)
-                continue
-            else:
-                print(f"Erreur API Gemini ({res.status_code}) : {res.text}")
-                break
-        except requests.exceptions.Timeout:
-            print(f"Timeout lors de l'appel Gemini (essai {attempt+1}/3). Nouvelle tentative dans 4s...")
-            time.sleep(4)
-        except Exception as e:
-            print(f"Exception lors de l'analyse IA : {e}")
-            time.sleep(3)
+        # 2 essais par modèle avec pause intermédiaire
+        for tentative in range(2):
+            try:
+                res = requests.post(url, headers=headers, json=payload, timeout=40)
+                if res.status_code == 200:
+                    data = res.json()
+                    raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
+                    parsed = json.loads(json_match.group(0)) if json_match else json.loads(raw_output)
+                    print(f"{Fore.GREEN}✔ Synthèse réussie avec {nom_modele}")
+                    return parsed
 
-    return None
+                if res.status_code in [429, 500, 503]:
+                    print(f"Charge élevée sur {nom_modele} ({res.status_code}). Pause de 6s...")
+                    time.sleep(6)
+                else:
+                    print(f"Code inattendu sur {nom_modele} ({res.status_code}) : {res.text[:120]}")
+                    break
+
+            except requests.exceptions.Timeout:
+                print(f"Timeout sur {nom_modele}. Nouvelle tentative...")
+                time.sleep(4)
+            except Exception as e:
+                print(f"Erreur sur {nom_modele} : {e}")
+                time.sleep(3)
+
+    print(f"{Fore.YELLOW}⚠️ Tous les modèles Gemini ont échoué. Bascule sur le flux brut.")
+    # Fallback propre : prend les 3 premiers articles bruts si l'API est totalement injoignable
+    fallback_news = []
+    for item in news_pool[:3]:
+        fallback_news.append({
+            "category": f"📰 {item['category']}",
+            "title": item["title"],
+            "summary": item["desc"] or "Détails disponibles en suivant le lien ci-dessus.",
+            "link": item["link"]
+        })
+    return fallback_news
 
 
 def get_color_html(valeur):
@@ -346,7 +363,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
 
     res = requests.post(url, headers=headers, json=payload, timeout=10)
     if res.status_code in [200, 201]:
-        print(f"{Fore.GREEN}✔ Briefing enrichi par IA envoyé avec succès !")
+        print(f"{Fore.GREEN}✔ Briefing envoyé avec succès !")
     else:
         print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
 
