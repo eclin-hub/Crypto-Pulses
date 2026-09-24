@@ -18,14 +18,26 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 
 def fetch_crypto_data():
-    fng_url = "https://api.alternative.me/fng/?limit=1"
-    fng_res = requests.get(fng_url, timeout=5).json()["data"][0]
+    try:
+        fng_url = "https://api.alternative.me/fng/?limit=1"
+        fng_res = requests.get(fng_url, timeout=5).json()["data"][0]
+    except Exception as e:
+        print(f"Erreur Fear & Greed : {e}")
+        fng_res = {"value": "50", "value_classification": "Neutral"}
 
-    cg_url = (
-        "https://api.coingecko.com/api/v3/simple/price"
-        "?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
-    )
-    cg_res = requests.get(cg_url, timeout=5).json()
+    try:
+        cg_url = (
+            "https://api.coingecko.com/api/v3/simple/price"
+            "?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
+        )
+        cg_res = requests.get(cg_url, timeout=5).json()
+    except Exception as e:
+        print(f"Erreur CoinGecko : {e}")
+        cg_res = {
+            "bitcoin": {"usd": 0.0, "usd_24h_change": 0.0},
+            "ethereum": {"usd": 0.0, "usd_24h_change": 0.0},
+        }
+
     return fng_res, cg_res
 
 
@@ -41,14 +53,15 @@ def fetch_hype_hyperliquid():
         universe = res[0]["universe"]
         contexts = res[1]
         idx = next(
-            i for i, asset in enumerate(universe) if asset["name"] == "HYPE"
+            i for i, asset in enumerate(universe) if asset.get("name") == "HYPE"
         )
         ctx = contexts[idx]
         prix = float(ctx["markPx"])
         prev_prix = float(ctx["prevDayPx"])
-        var_24h = ((prix - prev_prix) / prev_prix) * 100
+        var_24h = ((prix - prev_prix) / prev_prix) * 100 if prev_prix != 0 else 0.0
         return prix, var_24h
-    except Exception:
+    except Exception as e:
+        print(f"Erreur Hyperliquid : {e}")
         return None, None
 
 
@@ -58,13 +71,19 @@ def fetch_yahoo_direct(symbole):
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=5).json()
         meta = res["chart"]["result"][0]["meta"]
-        prix_actuel = float(meta["regularMarketPrice"])
-        prix_precedent = float(
-            meta.get("chartPreviousClose", meta.get("previousClose"))
-        )
-        var_24h = ((prix_actuel - prix_precedent) / prix_precedent) * 100
+        
+        prix_actuel = meta.get("regularMarketPrice")
+        prix_precedent = meta.get("chartPreviousClose") or meta.get("previousClose")
+
+        if prix_actuel is None or prix_precedent is None:
+            return None, None
+
+        prix_actuel = float(prix_actuel)
+        prix_precedent = float(prix_precedent)
+        var_24h = ((prix_actuel - prix_precedent) / prix_precedent) * 100 if prix_precedent != 0 else 0.0
         return prix_actuel, var_24h
-    except Exception:
+    except Exception as e:
+        print(f"Erreur Yahoo Finance ({symbole}) : {e}")
         return None, None
 
 
@@ -80,10 +99,10 @@ def clean_html_text(raw_text):
     if not raw_text:
         return ""
     clean = re.sub(r"<.*?>", "", raw_text)
-    return clean.strip()[:150]
+    return clean.strip()[:180]
 
 
-def fetch_multiple_feed_items(url, category, limit=4):
+def fetch_multiple_feed_items(url, category, limit=3):
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     items = []
     try:
@@ -91,21 +110,14 @@ def fetch_multiple_feed_items(url, category, limit=4):
         if res.status_code == 200:
             root = ET.fromstring(res.content)
             for item in root.findall(".//item")[:limit]:
-                title = (
-                    item.find("title").text
-                    if item.find("title") is not None
-                    else ""
-                )
-                link = (
-                    item.find("link").text
-                    if item.find("link") is not None
-                    else ""
-                )
-                desc = (
-                    item.find("description").text
-                    if item.find("description") is not None
-                    else ""
-                )
+                title_el = item.find("title")
+                link_el = item.find("link")
+                desc_el = item.find("description")
+
+                title = title_el.text if title_el is not None and title_el.text else ""
+                link = link_el.text if link_el is not None and link_el.text else ""
+                desc = desc_el.text if desc_el is not None and desc_el.text else ""
+
                 if title and link:
                     items.append(
                         {
@@ -171,28 +183,33 @@ def filtrer_et_analyser_avec_ia(news_pool):
         },
     }
 
-    # Récupération dynamique des modèles disponibles sur la clé API
+    # Résolution dynamique et intelligente des modèles actifs
     modeles_valides = []
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        r = requests.get(list_url, timeout=10)
+        r = requests.get(list_url, timeout=8)
         if r.status_code == 200:
             data = r.json().get("models", [])
+            flash_models = []
+            other_models = []
             for m in data:
                 nom = m.get("name", "").replace("models/", "")
                 methods = m.get("supportedGenerationMethods", [])
-                if "generateContent" in methods:
+                if "generateContent" in methods and "embedding" not in nom:
                     if "flash" in nom:
-                        modeles_valides.insert(0, nom)
+                        flash_models.append(nom)
                     else:
-                        modeles_valides.append(nom)
+                        other_models.append(nom)
+            # Les modèles Flash en tête, puis les autres
+            modeles_valides = flash_models + other_models
     except Exception as e:
-        print(f"Impossible de lister les modèles en ligne : {e}")
+        print(f"Impossible de lister dynamiquement les modèles : {e}")
 
+    # File de secours par défaut si le GET /models échoue
     if not modeles_valides:
-        modeles_valides = ["gemini-flash-latest", "gemini-pro-latest", "gemini-flash"]
+        modeles_valides = ["gemini-flash-latest", "gemini-pro-latest"]
 
-    print(f"Modèles prêts : {modeles_valides[:3]}")
+    print(f"Priorité des modèles : {modeles_valides[:3]}")
 
     for nom_modele in modeles_valides[:3]:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{nom_modele}:generateContent?key={GEMINI_API_KEY}"
@@ -200,20 +217,24 @@ def filtrer_et_analyser_avec_ia(news_pool):
 
         for tentative in range(2):
             try:
-                res = requests.post(url, headers=headers, json=payload, timeout=45)
+                res = requests.post(url, headers=headers, json=payload, timeout=40)
                 if res.status_code == 200:
                     data = res.json()
-                    raw_output = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
-                    parsed = json.loads(json_match.group(0)) if json_match else json.loads(raw_output)
-                    print(f"{Fore.GREEN}✔ Synthèse réussie avec {nom_modele}")
-                    return parsed
+                    parts = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])
+                    raw_output = parts[0].get("text", "").strip() if parts else ""
+                    
+                    if raw_output:
+                        json_match = re.search(r"\[.*\]", raw_output, re.DOTALL)
+                        parsed = json.loads(json_match.group(0)) if json_match else json.loads(raw_output)
+                        if isinstance(parsed, list) and len(parsed) > 0:
+                            print(f"{Fore.GREEN}✔ Synthèse réussie avec {nom_modele}")
+                            return parsed
 
                 if res.status_code in [429, 500, 503]:
-                    print(f"Charge élevée sur {nom_modele} ({res.status_code}). Pause 6s...")
+                    print(f"Saturation sur {nom_modele} ({res.status_code}). Pause 6s...")
                     time.sleep(6)
                 else:
-                    print(f"Code {res.status_code} sur {nom_modele} : {res.text[:120]}")
+                    print(f"Refus sur {nom_modele} ({res.status_code}) : {res.text[:120]}")
                     break
 
             except requests.exceptions.Timeout:
@@ -223,13 +244,13 @@ def filtrer_et_analyser_avec_ia(news_pool):
                 print(f"Erreur d'exécution : {e}")
                 time.sleep(2)
 
-    print(f"{Fore.YELLOW}⚠️ Tous les modèles ont échoué. Bascule sur le flux brut.")
+    print(f"{Fore.YELLOW}⚠️ Bascule sur le flux d'actualités brut (fallback).")
     fallback_news = []
     for item in news_pool[:3]:
         fallback_news.append({
             "category": f"📰 {item['category']}",
             "title": item["title"],
-            "summary": item["desc"] or "Détails disponibles en suivant le lien ci-dessus.",
+            "summary": item["desc"] or "Consultez l'article pour les détails financiers.",
             "link": item["link"]
         })
     return fallback_news
@@ -245,11 +266,11 @@ def get_color_html(valeur):
 
 def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     maintenant = datetime.now().strftime("%d/%m/%Y à %H:%M")
-    btc = cg["bitcoin"]
-    eth = cg["ethereum"]
+    btc = cg.get("bitcoin", {"usd": 0.0, "usd_24h_change": 0.0})
+    eth = cg.get("ethereum", {"usd": 0.0, "usd_24h_change": 0.0})
 
-    c_btc, v_btc = get_color_html(btc["usd_24h_change"])
-    c_eth, v_eth = get_color_html(eth["usd_24h_change"])
+    c_btc, v_btc = get_color_html(btc.get("usd_24h_change"))
+    c_eth, v_eth = get_color_html(eth.get("usd_24h_change"))
     c_hype, v_hype = get_color_html(hype_var)
 
     lignes_tradfi_html = ""
@@ -257,13 +278,18 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
         if px is not None:
             c, v = get_color_html(var)
             devise = "pts" if label == "S&P 500" else "USDC"
-            lignes_tradfi_html += (
-                "<tr>"
-                f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39;'>{label}</td>"
-                f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;'>{px:,.2f} {devise}</td>"
-                f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c}; font-weight: bold;'>{v}</td>"
-                "</tr>"
-            )
+            valeur_str = f"{px:,.2f} {devise}"
+        else:
+            c, v = "#888888", "N/A"
+            valeur_str = "Indisponible"
+
+        lignes_tradfi_html += (
+            "<tr>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39;'>{label}</td>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; font-weight: bold;'>{valeur_str}</td>"
+            f"<td style='padding: 8px 12px; border-bottom: 1px solid #2a2e39; text-align: right; color: {c}; font-weight: bold;'>{v}</td>"
+            "</tr>"
+        )
 
     news_blocks_html = ""
     if ai_curated_news:
@@ -289,27 +315,27 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
 
     legal_block_html = f"""
     <h3 style="color: #58a6ff; font-size: 14px; text-transform: uppercase; margin-top: 24px; margin-bottom: 10px;">
-      ⚖️ Le Point Droit Financier : {brief_du_jour['title']}
+      ⚖️ Le Point Droit Financier : {brief_du_jour.get('title', '')}
     </h3>
-    <div style="background-color: #0d1117; border-left: 3px solid #58a6ff; border-radius: 6px; padding: 14px; border-top: 1px solid #30363d; border-right: 1px solid #30363d; border-bottom: 1px solid #30363d;">
+    <div style="background-color: #0d1117; border-left: 3px solid #58a6ff; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
       <span style="color: #79c0ff; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
-        Thème : {brief_du_jour['category']}
+        Thème : {brief_du_jour.get('category', '')}
       </span>
       <p style="color: #c9d1d9; font-size: 12px; margin: 6px 0 8px 0; line-height: 1.45;">
-        {brief_du_jour['summary']}
+        {brief_du_jour.get('summary', '')}
       </p>
       <div style="background-color: #161b22; border-radius: 4px; padding: 8px 10px; border: 1px solid #30363d;">
         <span style="color: #f0883e; font-size: 11px; font-weight: bold;">À RETENIR :</span>
-        <span style="color: #8b949e; font-size: 11px; line-height: 1.4;"> {brief_du_jour['takeaway']}</span>
+        <span style="color: #8b949e; font-size: 11px; line-height: 1.4;"> {brief_du_jour.get('takeaway', '')}</span>
       </div>
     </div>
     """
 
-    btc_px = btc["usd"]
-    eth_px = eth["usd"]
+    btc_px = btc.get("usd", 0.0)
+    eth_px = eth.get("usd", 0.0)
     hype_display = f"{hype_px:,.2f} USDC" if hype_px is not None else "N/A"
-    fng_val = fng["value"]
-    fng_class = fng["value_classification"]
+    fng_val = fng.get("value", "N/A")
+    fng_class = fng.get("value_classification", "")
 
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -353,7 +379,7 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
     <h3 style="color: #ff7b72; font-size: 14px; text-transform: uppercase; margin-bottom: 10px;">
       🎯 Les 3 Développements Clés (Sélection IA)
     </h3>
-    <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border-1px solid #30363d;">
+    <div style="background-color: #0d1117; border-radius: 6px; padding: 14px; border: 1px solid #30363d;">
       {news_blocks_html}
     </div>
 
@@ -374,11 +400,14 @@ def envoyer_email(fng, cg, hype_px, hype_var, tradfi, ai_curated_news):
         "html": html_content,
     }
 
-    res = requests.post(url, headers=headers, json=payload, timeout=10)
-    if res.status_code in [200, 201]:
-        print(f"{Fore.GREEN}✔ Briefing envoyé avec succès !")
-    else:
-        print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code in [200, 201]:
+            print(f"{Fore.GREEN}✔ Briefing envoyé avec succès !")
+        else:
+            print(f"{Fore.RED}✘ Échec Resend ({res.status_code}) : {res.text}")
+    except Exception as e:
+        print(f"{Fore.RED}✘ Erreur d'expédition e-mail : {e}")
 
 
 def main():
