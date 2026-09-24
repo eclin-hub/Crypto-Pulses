@@ -2,7 +2,7 @@ name: Rapport Crypto Matinal
 
 on:
   schedule:
-    - cron: '45 5 * * *'
+    - cron: '36 5 * * *'
   workflow_dispatch:
 
 jobs:
