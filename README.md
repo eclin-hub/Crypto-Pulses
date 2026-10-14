@@ -36,7 +36,7 @@ Instead of checking 10 different tabs every morning, **CryptoPulse** compiles a 
 
 ## 🏗️ System Architecture
 
-```mermaid
+~~~mermaid
 graph LR
     A[⏰ GitHub Actions Cron] -->|Triggers Daily| B(🐍 CryptoPulse.py)
     
@@ -44,11 +44,4 @@ graph LR
         C1[🦎 CoinGecko: BTC, ETH] --> B
         C2[💧 Hyperliquid: HYPE] --> B
         C3[📊 Yahoo Finance: S&P500, Gold, WTI] --> B
-        D[📰 RSS: BBC, MarketWatch, The Block] --> B
-        L[⚖️ legal_briefs.py] --> B
-    end
-
-    B -->|Prompt + Context| E{🧠 Gemini 3.6 Flash<br/>+ Retry Logic}
-    E -->|Executive Analysis| B
-    B -->|HTML Newsletter| F[📩 Resend API]
-    F -->|Morning Delivery| G((📬 User Inbox))
+        D
