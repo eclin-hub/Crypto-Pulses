@@ -44,4 +44,72 @@ graph LR
         C1[🦎 CoinGecko: BTC, ETH] --> B
         C2[💧 Hyperliquid: HYPE] --> B
         C3[📊 Yahoo Finance: S&P500, Gold, WTI] --> B
-        D
+        D[📰 RSS: BBC, MarketWatch, The Block] --> B
+        L[⚖️ legal_briefs.py] --> B
+    end
+
+    B -->|Prompt + Context| E{🧠 Gemini 3.6 Flash<br/>+ Retry Logic}
+    E -->|Executive Analysis| B
+    B -->|HTML Newsletter| F[📩 Resend API]
+    F -->|Morning Delivery| G((📬 User Inbox))
+~~~
+
+---
+
+## 📂 Repository Structure
+
+~~~text
+├── .github/workflows/   # GitHub Actions cron configuration (daily execution)
+├── CryptoPulse.py       # Main pipeline: API fetching, RSS parsing, Gemini synthesis & Resend dispatch
+├── legal_briefs.py      # Module providing the daily legal/regulatory briefing section
+├── debug_news.py        # Diagnostic & testing utility for RSS feeds and news parsing
+└── README.md            # Project documentation
+~~~
+
+---
+
+## 🚀 Getting Started (Local Setup)
+
+### 1. Clone the repository
+~~~bash
+git clone https://github.com/eclin-hub/CryptoPulse.git
+cd CryptoPulse
+~~~
+
+### 2. Install dependencies
+~~~bash
+pip install requests feedparser yfinance google-genai resend
+~~~
+
+### 3. Set up Environment Variables
+Export your API keys or configure a `.env` file locally (never commit your keys):
+~~~env
+GEMINI_API_KEY="your_google_gemini_api_key"
+RESEND_API_KEY="your_resend_api_key"
+~~~
+
+### 4. Run or test the pipeline
+~~~bash
+# Test RSS feeds and news aggregation independently
+python debug_news.py
+
+# Run the full morning briefing pipeline
+python CryptoPulse.py
+~~~
+
+---
+
+## ⚙️ Serverless Automation (GitHub Actions)
+
+This project runs automatically every morning at **zero cost** using GitHub Actions runners:
+1. Go to your repository **Settings** > **Secrets and variables** > **Actions**.
+2. Add `GEMINI_API_KEY` and `RESEND_API_KEY` under **Repository secrets**.
+3. The workflow triggers automatically on schedule or manually via `workflow_dispatch` in the **Actions** tab.
+
+---
+
+## 👤 Author
+
+**Lin Bahic**  
+*Master 1 in Analysis and Economic Policy (APE) — Quantitative Finance, Macro & Econometrics*  
+🔗 [GitHub Profile](https://github.com/eclin-hub)
